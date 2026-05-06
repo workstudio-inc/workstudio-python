@@ -52,8 +52,8 @@ dev = [
 [project.urls]
 Homepage = "https://work.studio"
 Documentation = "https://docs.work.studio/sdk/python"
-Repository = "https://github.com/pooja-spacevox/workstudio-python"
-Issues = "https://github.com/pooja-spacevox/workstudio-python/issues"
+Repository = "https://github.com/spacevox-ai/workstudio-python"
+Issues = "https://github.com/spacevox-ai/workstudio-python/issues"
 
 [tool.hatch.build.targets.sdist]
 include = [

@@ -191,7 +191,7 @@ Get your API key from the [Designer](https://designer.work.studio) → API Keys 
 
 ```bash
 # Clone and install dev dependencies
-git clone https://github.com/pooja-spacevox/workstudio-python
+git clone https://github.com/spacevox-ai/workstudio-python
 cd workstudio-python
 pip install -e ".[dev]"
 
