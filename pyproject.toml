@@ -51,7 +51,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://work.studio"
-Documentation = "https://docs.work.studio/sdk/python"
+Documentation = "https://docs.work.studio/api-reference/"
 Repository = "https://github.com/workstudio-inc/workstudio-python"
 Issues = "https://github.com/workstudio-inc/workstudio-python/issues"
 
