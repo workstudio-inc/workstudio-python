@@ -4,7 +4,15 @@ import pytest
 from uuid import UUID, uuid4
 
 from workstudio import Client, AsyncClient
-from workstudio.models import Workflow, WorkflowRun, Agent, RunStatus
+from workstudio.models import (
+    Workflow,
+    WorkflowRun,
+    Agent,
+    RunStatus,
+    MessageResponse,
+    MessageStatus,
+    MessageMetrics,
+)
 from workstudio.exceptions import AuthenticationError, NotFoundError, ValidationError
 
 
@@ -77,6 +85,54 @@ class TestModels:
         assert agent.name == "test-agent"
         assert agent.display_name == "Test Agent"
         assert agent.model_id == "gpt-4"
+
+    def test_message_response_parse(self):
+        """MessageResponse parses API format correctly."""
+        # This matches the TestMessageResponse structure from ai-runtime
+        data = {
+            "sessionId": str(uuid4()),
+            "messageId": "msg-123",
+            "userMessage": "Hello",
+            "assistantResponse": "Hi there! How can I help?",
+            "status": "SUCCESS",
+            "metrics": {
+                "latencyMs": 150,
+                "inputTokens": 10,
+                "outputTokens": 15,
+                "totalTokens": 25,
+                "estimatedCostUsd": 0.001,
+                "modelUsed": "gpt-4",
+            },
+            "toolExecutions": [
+                {
+                    "toolName": "search",
+                    "durationMs": 50,
+                    "success": True,
+                }
+            ],
+            "knowledgeBaseHits": [],
+        }
+        resp = MessageResponse.model_validate(data)
+        assert resp.status == MessageStatus.SUCCESS
+        assert resp.message == "Hi there! How can I help?"
+        assert resp.user_message == "Hello"
+        # Test convenience properties
+        assert resp.prompt_tokens == 10
+        assert resp.completion_tokens == 15
+        assert resp.total_tokens == 25
+        assert resp.latency_ms == 150
+        assert resp.tools_used == ["search"]
+
+    def test_message_response_without_metrics(self):
+        """MessageResponse handles missing metrics gracefully."""
+        data = {
+            "status": "SUCCESS",
+            "assistantResponse": "Hello!",
+        }
+        resp = MessageResponse.model_validate(data)
+        assert resp.message == "Hello!"
+        assert resp.prompt_tokens == 0  # Defaults when no metrics
+        assert resp.total_tokens == 0
 
 
 class TestExceptions:

@@ -39,6 +39,9 @@ from workstudio.models import (
     Agent,
     AgentSession,
     MessageResponse,
+    MessageMetrics,
+    ToolExecution,
+    KnowledgeBaseHit,
 )
 from workstudio.exceptions import (
     WorkStudioError,
@@ -61,6 +64,9 @@ __all__ = [
     "Agent",
     "AgentSession",
     "MessageResponse",
+    "MessageMetrics",
+    "ToolExecution",
+    "KnowledgeBaseHit",
     # Exceptions
     "WorkStudioError",
     "AuthenticationError",

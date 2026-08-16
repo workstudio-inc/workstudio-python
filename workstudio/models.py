@@ -152,25 +152,103 @@ class AgentSession(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class MessageMetrics(BaseModel):
+    """Metrics from an agent message response."""
+
+    latency_ms: int = Field(default=0, alias="latencyMs")
+    time_to_first_token_ms: int = Field(default=0, alias="timeToFirstTokenMs")
+    input_tokens: int = Field(default=0, alias="inputTokens")
+    output_tokens: int = Field(default=0, alias="outputTokens")
+    total_tokens: int = Field(default=0, alias="totalTokens")
+    estimated_cost_usd: Optional[float] = Field(default=None, alias="estimatedCostUsd")
+    agent_iterations: int = Field(default=0, alias="agentIterations")
+    model_used: Optional[str] = Field(default=None, alias="modelUsed")
+    provider_used: Optional[str] = Field(default=None, alias="providerUsed")
+
+    model_config = {"populate_by_name": True}
+
+
+class ToolExecution(BaseModel):
+    """Details of a tool execution during agent processing."""
+
+    tool_name: str = Field(alias="toolName")
+    tool_type: Optional[str] = Field(default=None, alias="toolType")
+    input: Optional[dict[str, Any]] = None
+    output: Optional[Any] = None
+    duration_ms: int = Field(default=0, alias="durationMs")
+    success: bool = True
+    error_message: Optional[str] = Field(default=None, alias="errorMessage")
+
+    model_config = {"populate_by_name": True}
+
+
+class KnowledgeBaseHit(BaseModel):
+    """Knowledge base search hit details."""
+
+    knowledge_base_id: str = Field(alias="knowledgeBaseId")
+    knowledge_base_name: Optional[str] = Field(default=None, alias="knowledgeBaseName")
+    document_title: Optional[str] = Field(default=None, alias="documentTitle")
+    chunk_preview: Optional[str] = Field(default=None, alias="chunkPreview")
+    relevance_score: float = Field(default=0.0, alias="relevanceScore")
+    search_latency_ms: int = Field(default=0, alias="searchLatencyMs")
+
+    model_config = {"populate_by_name": True}
+
+
 class MessageResponse(BaseModel):
     """Response from sending a message to an agent."""
 
     status: MessageStatus
-    message: Optional[str] = None
+    message: Optional[str] = Field(default=None, alias="assistantResponse")
+    user_message: Optional[str] = Field(default=None, alias="userMessage")
+    message_id: Optional[str] = Field(default=None, alias="messageId")
+    session_id: Optional[UUID] = Field(default=None, alias="sessionId")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
 
-    # Metrics
-    prompt_tokens: int = Field(default=0, alias="promptTokens")
-    completion_tokens: int = Field(default=0, alias="completionTokens")
-    total_tokens: int = Field(default=0, alias="totalTokens")
-    latency_ms: int = Field(default=0, alias="latencyMs")
-    estimated_cost_usd: float = Field(default=0.0, alias="estimatedCostUsd")
+    # Detailed metrics
+    metrics: Optional[MessageMetrics] = None
 
-    # Tool usage
-    tools_used: list[str] = Field(default_factory=list, alias="toolsUsed")
-    knowledge_sources_used: list[str] = Field(default_factory=list, alias="knowledgeSourcesUsed")
+    # Tool and knowledge base usage
+    tool_executions: list[ToolExecution] = Field(default_factory=list, alias="toolExecutions")
+    knowledge_base_hits: list[KnowledgeBaseHit] = Field(default_factory=list, alias="knowledgeBaseHits")
 
     model_config = {"populate_by_name": True}
+
+    # Convenience properties for common metrics
+    @property
+    def prompt_tokens(self) -> int:
+        """Alias for input tokens (backward compat)."""
+        return self.metrics.input_tokens if self.metrics else 0
+
+    @property
+    def completion_tokens(self) -> int:
+        """Alias for output tokens (backward compat)."""
+        return self.metrics.output_tokens if self.metrics else 0
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens used."""
+        return self.metrics.total_tokens if self.metrics else 0
+
+    @property
+    def latency_ms(self) -> int:
+        """Response latency in milliseconds."""
+        return self.metrics.latency_ms if self.metrics else 0
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        """Estimated cost in USD."""
+        return self.metrics.estimated_cost_usd if self.metrics else 0.0
+
+    @property
+    def tools_used(self) -> list[str]:
+        """List of tool names that were executed."""
+        return [t.tool_name for t in self.tool_executions]
+
+    @property
+    def knowledge_sources_used(self) -> list[str]:
+        """List of knowledge base names that were queried."""
+        return [k.knowledge_base_name for k in self.knowledge_base_hits if k.knowledge_base_name]
 
 
 class StartSessionRequest(BaseModel):

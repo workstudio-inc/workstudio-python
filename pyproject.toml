@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [
-    { name = "SpaceVox Inc", email = "developers@spacevox.com" }
+    { name = "Workstudio Inc", email = "developers@work.studio" }
 ]
 keywords = [
     "workflow",
@@ -18,7 +18,7 @@ keywords = [
     "ai",
     "agents",
     "work.studio",
-    "spacevox"
+    "workstudio"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
