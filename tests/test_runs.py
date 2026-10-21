@@ -348,6 +348,23 @@ class TestReadingRuns:
         with pytest.raises(APIError):
             client.workflows.get_run_by_external_id("boom")
 
+    def test_external_id_is_url_encoded(self, client: Client, platform: FakePlatform) -> None:
+        platform.on("GET", f"{BASE}/api/v1/workflow/run/by-external-id/order/1 2", (200, run_dto("RUNNING")))
+
+        run = client.workflows.get_run_by_external_id("order/1 2")
+
+        assert run is not None
+        assert platform.requests[0].url.raw_path.endswith(b"/by-external-id/order%2F1%202")
+
+    @pytest.mark.parametrize("bad", ["/relative/final-output.json", "ftp://bucket/x", "not a url"])
+    def test_an_unusable_result_link_is_an_api_error(
+        self, client: Client, platform: FakePlatform, bad: str
+    ) -> None:
+        run = WorkflowRun.model_validate(run_dto("FINISHED", finalOutputUrl=bad))
+
+        with pytest.raises(APIError, match="not a usable URL"):
+            client.workflows.get_output(run)
+
     def test_cancel(self, client: Client, platform: FakePlatform) -> None:
         platform.on("POST", f"{RUN}/cancel", (200, run_dto("CANCELLED")))
 

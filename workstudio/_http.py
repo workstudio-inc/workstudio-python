@@ -5,6 +5,7 @@ Internal HTTP client for the work.studio SDK.
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -105,6 +106,13 @@ def raise_for_status(response: httpx.Response) -> None:
     )
 
 
+def check_external_url(url: str) -> None:
+    """Refuse a result link that is not an absolute http(s) URL, as an :class:`APIError`."""
+    parts = urlsplit(url) if isinstance(url, str) else None
+    if parts is None or parts.scheme not in ("http", "https") or not parts.netloc:
+        raise APIError(f"The run's result link is not a usable URL: {str(url)[:200]!r}")
+
+
 def parse_body(response: httpx.Response) -> Any:
     """A success body as JSON; ``{}`` for an empty one."""
     if response.status_code == 204 or not response.content:
@@ -183,6 +191,7 @@ class HTTPClient:
 
         The key must never travel to another host; a presigned URL carries its own authority.
         """
+        check_external_url(url)
         try:
             with httpx.Client(timeout=self.timeout, transport=self._transport) as plain:
                 return plain.get(url)
@@ -190,6 +199,8 @@ class HTTPClient:
             raise TimeoutError(f"Request timed out: {e}")
         except httpx.ConnectError as e:
             raise ConnectionError(f"Failed to connect: {e}")
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol) as e:
+            raise APIError(f"The run's result link is not a usable URL: {e}")
 
     def get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         """Make a GET request."""
@@ -284,6 +295,7 @@ class AsyncHTTPClient:
 
     async def fetch_external(self, url: str) -> httpx.Response:
         """GET a presigned storage URL WITHOUT the API key (see ``HTTPClient.fetch_external``)."""
+        check_external_url(url)
         try:
             async with httpx.AsyncClient(timeout=self.timeout, transport=self._transport) as plain:
                 return await plain.get(url)
@@ -291,6 +303,8 @@ class AsyncHTTPClient:
             raise TimeoutError(f"Request timed out: {e}")
         except httpx.ConnectError as e:
             raise ConnectionError(f"Failed to connect: {e}")
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol) as e:
+            raise APIError(f"The run's result link is not a usable URL: {e}")
 
     async def get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         """Make an async GET request."""

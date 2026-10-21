@@ -289,7 +289,7 @@ class WorkflowsClient:
     def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
         """The run started with this ``external_id``, or None when there is none."""
         try:
-            response = self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
+            response = self._http.get(_runs.by_external_id_path(external_id))
         except NotFoundError:
             return None
         return WorkflowRun.model_validate(response) if response else None
@@ -493,7 +493,7 @@ class AsyncWorkflowsClient:
     async def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
         """The run started with this ``external_id``, or None when there is none."""
         try:
-            response = await self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
+            response = await self._http.get(_runs.by_external_id_path(external_id))
         except NotFoundError:
             return None
         return WorkflowRun.model_validate(response) if response else None

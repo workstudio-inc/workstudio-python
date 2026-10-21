@@ -40,6 +40,11 @@ def execute_path(workflow: Union[UUID, str]) -> str:
         return f"{EXECUTE_PATH}/{quote(text, safe='')}"
 
 
+def by_external_id_path(external_id: str) -> str:
+    """The lookup route, with the caller's id encoded - it may hold ``/``, spaces, ``?``."""
+    return f"{RUN_PATH}/by-external-id/{quote(str(external_id), safe='')}"
+
+
 def start_body(inputs: Optional[dict[str, Any]], external_id: Optional[str]) -> dict[str, Any]:
     """The request body: the inputs, plus ``externalId`` when given (read from there)."""
     body = dict(inputs or {})

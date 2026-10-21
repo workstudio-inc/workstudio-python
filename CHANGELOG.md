@@ -23,7 +23,9 @@ never existed), and every run came back as a validation error because the SDK ex
 - `list()`, `list_runs()` read the platform's list shape (`data` + `pagination`); in 0.1 they
   always came back empty.
 - `get_run_by_external_id()` returns None only when there is no such run, instead of swallowing
-  every error.
+  every error, and URL-encodes the id (it may hold `/`, spaces, `?`).
+- A result link that is not an absolute http(s) URL raises `APIError` rather than an `httpx`
+  exception.
 - Python 3.9: the package no longer fails to import (`UUID | str` annotations).
 
 ### Added
