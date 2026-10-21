@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any, Optional
 
-from workstudio import AsyncClient
+from workstudio import AsyncClient, RunFailedError, RunTimeoutError
 from workstudio.exceptions import NotFoundError, WorkStudioError
 
 
@@ -71,14 +71,18 @@ async def run_workflow(request: WorkflowRunRequest):
         result = await client.workflows.run(
             request.workflow,
             inputs=request.inputs,
-            sync=True,
+            timeout=60,
         )
         return {
             "run_id": str(result.id),
-            "status": result.status.value,
-            "outputs": result.outputs,
+            "status": result.status_name,
+            "output": result.output,
             "duration_ms": result.duration_ms,
         }
+    except RunFailedError as e:
+        raise HTTPException(status_code=502, detail=f"Run ended {e.run.status_name}: {e.run.error}")
+    except RunTimeoutError as e:
+        raise HTTPException(status_code=504, detail=f"Run {e.run.id} still {e.run.status_name}")
     except NotFoundError:
         raise HTTPException(status_code=404, detail=f"Workflow '{request.workflow}' not found")
     except WorkStudioError as e:

@@ -2,17 +2,18 @@
 Agents module for the work.studio SDK.
 """
 
+from __future__ import annotations
+
 from typing import Any, Optional
 from uuid import UUID
 
-from workstudio._http import HTTPClient, AsyncHTTPClient
+from workstudio._http import AsyncHTTPClient, HTTPClient
 from workstudio.models import (
     Agent,
     AgentSession,
     MessageResponse,
     PageInfo,
 )
-
 
 # API paths
 API_PREFIX = "/api/v1/workflow"

@@ -67,8 +67,11 @@ class TestModels:
             "createdAt": "2024-01-01T00:00:00Z",
         }
         run = WorkflowRun.model_validate(data)
+        # "COMPLETED" is the 0.1 name; the platform says FINISHED and both read as one member.
         assert run.status == RunStatus.COMPLETED
-        assert run.outputs == {"result": 42}
+        assert run.status is RunStatus.FINISHED
+        # Results are not inline on a run: they come from get_output() / run().
+        assert run.outputs is None
     
     def test_agent_parse(self):
         """Agent model parses correctly."""

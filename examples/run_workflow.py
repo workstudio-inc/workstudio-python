@@ -1,68 +1,45 @@
 """
-Example: Run a workflow and process the results.
+Example: run a workflow from code and use its result.
 
 This example shows how to:
-1. Connect to work.studio
-2. Run a workflow with inputs
-3. Handle the results
+1. Run a workflow and wait for its result
+2. Start a run now and follow it later
+3. Handle a run that fails or takes too long
 """
 
-from workstudio import Client
+from workstudio import Client, RunFailedError, RunTimeoutError
 from workstudio.exceptions import NotFoundError, ValidationError
 
-# Initialize client
-# You can pass api_key directly or set WORKSTUDIO_API_KEY env var
+# You can pass api_key directly or set WORKSTUDIO_API_KEY.
 client = Client(api_key="your-api-key-here")
 
-# Example 1: Simple workflow run
+# 1. Run and wait. The workflow is named by its endpoint slug here; its global id (a UUID) works too.
 print("=== Running Invoice Processor ===")
 try:
-    result = client.workflows.run(
-        "invoice-processor",  # workflow endpoint name
-        inputs={
-            "file_url": "https://example.com/invoice.pdf",
-            "extract_line_items": True,
-        }
+    run = client.workflows.run(
+        "invoice-processor",
+        inputs={"file_url": "https://example.com/invoice.pdf", "extract_line_items": True},
+        timeout=120,
     )
-    
-    print(f"Run ID: {result.id}")
-    print(f"Status: {result.status}")
-    print(f"Duration: {result.duration_ms}ms")
-    
-    if result.outputs:
-        print(f"Extracted data: {result.outputs}")
-        
+    print(f"Run {run.id}: {run.status_name} in {run.duration_ms}ms")
+    print(f"Result: {run.output}")
+except RunFailedError as e:
+    print(f"The run ended {e.run.status_name}: {e.run.error}")
+except RunTimeoutError as e:
+    print(f"Still {e.run.status_name} after {e.waited_seconds:.0f}s - it carries on")
 except NotFoundError:
     print("Workflow 'invoice-processor' not found")
 except ValidationError as e:
     print(f"Invalid inputs: {e.errors}")
 
-# Example 2: List all workflows
-print("\n=== Available Workflows ===")
-workflows, page_info = client.workflows.list()
-for wf in workflows:
-    print(f"  - {wf.name} ({wf.endpoint})")
-print(f"Total: {page_info.total_elements} workflows")
+# 2. Start now, follow later - e.g. from a job queue.
+print("\n=== Start now, follow later ===")
+run = client.workflows.start("long-running-job", inputs={"data": "example"}, external_id="job-42")
+print(f"Started run {run.id} ({run.status_name})")
 
-# Example 3: Run workflow asynchronously and poll
-print("\n=== Async Workflow Run ===")
-run = client.workflows.run(
-    "long-running-job",
-    inputs={"data": "example"},
-    sync=False,  # Don't wait for completion
-)
-print(f"Started run: {run.id}")
-print(f"Initial status: {run.status}")
-
-# Poll for completion
-import time
-while run.status in ("PENDING", "RUNNING"):
-    time.sleep(2)
-    run = client.workflows.get_run(run.id)
-    print(f"Status: {run.status}")
-
-print(f"Final status: {run.status}")
-if run.outputs:
-    print(f"Results: {run.outputs}")
+run = client.workflows.wait(run.id, timeout=600)
+print(f"Final status: {run.status_name}")
+if run.succeeded:
+    print(f"Result: {client.workflows.get_output(run)}")
 
 client.close()

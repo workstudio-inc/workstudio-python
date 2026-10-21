@@ -5,9 +5,11 @@ Main client for the work.studio SDK.
 import os
 from typing import Any, Optional
 
-from workstudio._http import HTTPClient, AsyncHTTPClient, DEFAULT_BASE_URL, DEFAULT_TIMEOUT
-from workstudio.workflows import WorkflowsClient, AsyncWorkflowsClient
+import httpx
+
+from workstudio._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, AsyncHTTPClient, HTTPClient
 from workstudio.agents import AgentsClient, AsyncAgentsClient
+from workstudio.workflows import AsyncWorkflowsClient, WorkflowsClient
 
 
 class Client:
@@ -26,8 +28,9 @@ class Client:
         # List workflows
         workflows, _ = client.workflows.list()
 
-        # Run a workflow
-        result = client.workflows.run("invoice-processor", {"file_url": "..."})
+        # Run a workflow and wait for its result
+        run = client.workflows.run("invoice-processor", {"file_url": "..."})
+        print(run.output)
 
         # Chat with an agent
         response = client.agents.chat("sales-assistant", "What are our top deals?")
@@ -44,6 +47,9 @@ class Client:
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         scope_id: Optional[str] = None,
+        *,
+        scope_key: Optional[str] = None,
+        transport: Optional[httpx.BaseTransport] = None,
     ):
         """
         Initialize the client.
@@ -54,8 +60,11 @@ class Client:
             base_url: API base URL. Defaults to https://api.work.studio.
                      Can also be set via WORKSTUDIO_BASE_URL env var.
             timeout: Request timeout in seconds (default: 30)
-            scope_id: Optional scope ID or key for customer-scoped operations.
-                     Can also be set via WORKSTUDIO_SCOPE_ID env var.
+            scope_id: The customer a TENANT key acts for, e.g. ``"customer:acme"`` (sent as
+                     ``X-SCOPE-KEY``). Not needed with a CUSTOMER key, which is bound to its
+                     customer. Can also be set via WORKSTUDIO_SCOPE_ID env var.
+            scope_key: Same as ``scope_id`` (the name the API uses).
+            transport: An ``httpx`` transport - for tests (``httpx.MockTransport``) or proxies.
 
         Raises:
             ValueError: If no API key is provided or found in environment
@@ -64,14 +73,15 @@ class Client:
         resolved_api_key = api_key or os.environ.get("WORKSTUDIO_API_KEY")
         if not resolved_api_key:
             raise ValueError(
-                "API key required. Pass api_key argument or set WORKSTUDIO_API_KEY environment variable."
+                "API key required. Pass api_key argument or set WORKSTUDIO_API_KEY "
+                "environment variable."
             )
 
         # Resolve base URL
         resolved_base_url = base_url or os.environ.get("WORKSTUDIO_BASE_URL", DEFAULT_BASE_URL)
 
         # Resolve scope
-        resolved_scope = scope_id or os.environ.get("WORKSTUDIO_SCOPE_ID")
+        resolved_scope = scope_key or scope_id or os.environ.get("WORKSTUDIO_SCOPE_ID")
 
         # Create HTTP client
         self._http = HTTPClient(
@@ -79,6 +89,7 @@ class Client:
             base_url=resolved_base_url,
             timeout=timeout,
             scope_id=resolved_scope,
+            transport=transport,
         )
 
         # Initialize API clients
@@ -119,8 +130,8 @@ class AsyncClient:
                 # List workflows
                 workflows, _ = await client.workflows.list()
 
-                # Run a workflow
-                result = await client.workflows.run("invoice-processor")
+                # Run a workflow and wait for its result
+                run = await client.workflows.run("invoice-processor")
 
                 # Chat with an agent
                 response = await client.agents.chat("sales-assistant", "Hello!")
@@ -134,6 +145,9 @@ class AsyncClient:
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         scope_id: Optional[str] = None,
+        *,
+        scope_key: Optional[str] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
         """
         Initialize the async client.
@@ -143,22 +157,26 @@ class AsyncClient:
                      If not provided, reads from WORKSTUDIO_API_KEY env var.
             base_url: API base URL. Defaults to https://api.work.studio.
             timeout: Request timeout in seconds (default: 30)
-            scope_id: Optional scope ID for customer-scoped operations.
+            scope_id: The customer a TENANT key acts for (``X-SCOPE-KEY``).
+            scope_key: Same as ``scope_id``.
+            transport: An ``httpx`` async transport, for tests or proxies.
         """
         resolved_api_key = api_key or os.environ.get("WORKSTUDIO_API_KEY")
         if not resolved_api_key:
             raise ValueError(
-                "API key required. Pass api_key argument or set WORKSTUDIO_API_KEY environment variable."
+                "API key required. Pass api_key argument or set WORKSTUDIO_API_KEY "
+                "environment variable."
             )
 
         resolved_base_url = base_url or os.environ.get("WORKSTUDIO_BASE_URL", DEFAULT_BASE_URL)
-        resolved_scope = scope_id or os.environ.get("WORKSTUDIO_SCOPE_ID")
+        resolved_scope = scope_key or scope_id or os.environ.get("WORKSTUDIO_SCOPE_ID")
 
         self._http = AsyncHTTPClient(
             api_key=resolved_api_key,
             base_url=resolved_base_url,
             timeout=timeout,
             scope_id=resolved_scope,
+            transport=transport,
         )
 
         self._workflows = AsyncWorkflowsClient(self._http)

@@ -14,8 +14,13 @@ Basic usage:
     # List workflows
     workflows = client.workflows.list()
 
-    # Run a workflow
-    result = client.workflows.run("my-workflow", inputs={"key": "value"})
+    # Run a workflow and wait for its result
+    run = client.workflows.run("my-workflow", inputs={"key": "value"})
+    print(run.status, run.output)
+
+    # Or start it, and follow it yourself
+    run = client.workflows.start("my-workflow", inputs={"key": "value"})
+    run = client.workflows.wait(run.id)
 
     # Chat with an agent
     session = client.agents.create_session("sales-assistant")
@@ -31,28 +36,31 @@ For async usage:
 
 """
 
-from workstudio.client import Client, AsyncClient
-from workstudio.models import (
-    Workflow,
-    WorkflowRun,
-    RunStatus,
-    Agent,
-    AgentSession,
-    MessageResponse,
-    MessageMetrics,
-    ToolExecution,
-    KnowledgeBaseHit,
-)
+from workstudio._version import __version__
+from workstudio.client import AsyncClient, Client
 from workstudio.exceptions import (
-    WorkStudioError,
+    APIError,
     AuthenticationError,
     NotFoundError,
-    ValidationError,
+    PermissionDeniedError,
     RateLimitError,
-    APIError,
+    RunFailedError,
+    RunTimeoutError,
+    ValidationError,
+    WorkStudioError,
+)
+from workstudio.models import (
+    Agent,
+    AgentSession,
+    KnowledgeBaseHit,
+    MessageMetrics,
+    MessageResponse,
+    RunStatus,
+    ToolExecution,
+    Workflow,
+    WorkflowRun,
 )
 
-__version__ = "0.1.0"
 __all__ = [
     # Clients
     "Client",
@@ -70,8 +78,12 @@ __all__ = [
     # Exceptions
     "WorkStudioError",
     "AuthenticationError",
+    "PermissionDeniedError",
     "NotFoundError",
     "ValidationError",
     "RateLimitError",
     "APIError",
+    "RunFailedError",
+    "RunTimeoutError",
+    "__version__",
 ]
