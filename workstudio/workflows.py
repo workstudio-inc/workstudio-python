@@ -1,40 +1,90 @@
 """
 Workflows module for the work.studio SDK.
+
+Routes (all under ``/api/v1/workflow``; prod serves them from the monolith behind
+``https://api.work.studio``):
+
+- ``POST /execute/{endpoint}`` and ``POST /execute/id/{globalUniqueId}`` start a run (trigger
+  ``WorkflowExecutionController``). The body is the run's input; ``?async=true`` answers at once
+  with ``{runStatus, executionResult}``. Any API key with ``workflow:execute`` may call them, a
+  customer key included (it always runs for its own customer).
+- ``POST /run/{id}/wait``, ``GET /run/{id}``, ``GET /run``, ``GET /run/by-external-id/{id}`` read
+  runs (run ``WorkflowRunController``). A key with only ``workflow:execute`` reads the runs it
+  started.
+- ``GET /portal``, ``GET /portal/{id}``, ``GET /portal/by-endpoint/{endpoint}`` read definitions
+  (portal ``WorkflowPortalController``): organization keys only, never customer keys.
 """
 
+import asyncio
 import time
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
+from urllib.parse import quote
 from uuid import UUID
 
-from workstudio._http import HTTPClient, AsyncHTTPClient
-from workstudio.exceptions import NotFoundError
+from workstudio._http import AsyncHTTPClient, HTTPClient
+from workstudio.exceptions import NotFoundError, WorkStudioError
 from workstudio.models import (
     PageInfo,
-    RunStatus,
     Workflow,
     WorkflowRun,
+    parse_page,
 )
-
 
 # API paths (matching backend Constant.WF_SERVICE_MOUNT_POINT)
 API_PREFIX = "/api/v1/workflow"
 PORTAL_PATH = f"{API_PREFIX}/portal"
 RUN_PATH = f"{API_PREFIX}/run"
+EXECUTE_PATH = f"{API_PREFIX}/execute"
+
+#: Start the run and answer at once; the SDK then follows it with /run/{id}/wait.
+_ASYNC = {"async": "true"}
+
+#: Longest single long-poll on ``/run/{id}/wait``. The server caps one wait at 120 s and the load
+#: balancer closes a connection that is silent for 180 s; 110 s stays inside both.
+LONG_POLL_MAX_SECONDS = 110.0
+
+#: Extra seconds the HTTP read may take beyond the wait it asked the server for.
+_WAIT_HTTP_MARGIN_SECONDS = 15.0
 
 
-def _as_workflow_uuid(workflow_id: UUID | str) -> Optional[UUID]:
+def _as_workflow_uuid(workflow_id: Union[UUID, str]) -> Optional[UUID]:
     """The workflow id as a UUID, or None when it is an endpoint name."""
     if isinstance(workflow_id, UUID):
         return workflow_id
     try:
-        return UUID(str(workflow_id))
+        return UUID(str(workflow_id).strip())
     except ValueError:
         return None
 
 
-def _run_path(workflow_id: UUID) -> str:
-    """The portal route that runs a workflow by its id (row id or global id)."""
-    return f"{PORTAL_PATH}/{workflow_id}/run"
+def _segment(value: Any) -> str:
+    """One URL path segment, encoded: an endpoint name or external id may hold ``/``, ``?``."""
+    return quote(str(value).strip(), safe="")
+
+
+def _execute_path(workflow_id: Union[UUID, str]) -> str:
+    """
+    The route that starts a workflow from code.
+
+    A UUID is the workflow's global unique id (``/execute/id/{id}``); anything else is its endpoint
+    name (``/execute/{endpoint}``).
+    """
+    workflow_uuid = _as_workflow_uuid(workflow_id)
+    if workflow_uuid is not None:
+        return f"{EXECUTE_PATH}/id/{workflow_uuid}"
+    return f"{EXECUTE_PATH}/{_segment(workflow_id)}"
+
+
+def _start_body(inputs: Optional[dict[str, Any]], external_id: Optional[str]) -> dict[str, Any]:
+    """The run's input; ``externalId`` rides in it (the trigger service reads it from there)."""
+    body = dict(inputs or {})
+    if external_id is not None:
+        body["externalId"] = external_id
+    return body
+
+
+def _wait_params(seconds: float) -> dict[str, Any]:
+    return {"timeout": max(1, int(seconds * 1000))}
 
 
 def _endpoint_not_found(endpoint: str, cause: NotFoundError) -> NotFoundError:
@@ -60,6 +110,8 @@ class WorkflowsClient:
         """
         List all workflows.
 
+        Needs an organization key (``svx_tk_``); a customer key gets 403.
+
         Args:
             page: Page number (0-indexed)
             size: Number of items per page
@@ -77,14 +129,10 @@ class WorkflowsClient:
         if search:
             params["search"] = search
 
-        response = self._http.get(PORTAL_PATH, params=params)
+        items, page_info = parse_page(self._http.get(PORTAL_PATH, params=params))
+        return [Workflow.model_validate(w) for w in items], page_info
 
-        workflows = [Workflow.model_validate(w) for w in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return workflows, page_info
-
-    def get(self, workflow_id: UUID | str) -> Workflow:
+    def get(self, workflow_id: Union[UUID, str]) -> Workflow:
         """
         Get a workflow by ID.
 
@@ -97,7 +145,7 @@ class WorkflowsClient:
         Raises:
             NotFoundError: If workflow not found
         """
-        response = self._http.get(f"{PORTAL_PATH}/{workflow_id}")
+        response = self._http.get(f"{PORTAL_PATH}/{_segment(workflow_id)}")
         return Workflow.model_validate(response)
 
     def get_by_endpoint(self, endpoint: str) -> Workflow:
@@ -113,19 +161,12 @@ class WorkflowsClient:
         Raises:
             NotFoundError: If workflow not found
         """
-        response = self._http.get(f"{PORTAL_PATH}/by-endpoint/{endpoint}")
+        response = self._http.get(f"{PORTAL_PATH}/by-endpoint/{_segment(endpoint)}")
         return Workflow.model_validate(response)
-
-    def _resolve_endpoint(self, endpoint: str) -> UUID:
-        """The id of the workflow with this endpoint name; NotFoundError when there is none."""
-        try:
-            return self.get_by_endpoint(endpoint).id
-        except NotFoundError as e:
-            raise _endpoint_not_found(endpoint, e) from e
 
     def run(
         self,
-        workflow_id: UUID | str,
+        workflow_id: Union[UUID, str],
         inputs: Optional[dict[str, Any]] = None,
         *,
         sync: bool = True,
@@ -135,15 +176,22 @@ class WorkflowsClient:
         """
         Run a workflow.
 
+        Starts the run with ``POST /execute/{endpoint}`` (or ``/execute/id/{globalUniqueId}`` for a
+        UUID) and, with ``sync=True``, follows it with ``POST /run/{id}/wait`` until it ends or
+        ``timeout_seconds`` pass. The workflow's published version runs.
+
         Args:
-            workflow_id: The workflow UUID or endpoint name
+            workflow_id: The workflow's endpoint name, or its global unique id. A workflow's row
+                id (``Workflow.id``) also works with an organization key: it is looked up and run
+                by its global id.
             inputs: Input data for the workflow
             sync: If True, wait for completion (default: True)
-            timeout_seconds: Timeout for sync mode (default: 300)
-            external_id: Optional client-provided correlation ID
+            timeout_seconds: How long to wait in sync mode (default: 300). A run still going
+                then is returned as it stands.
+            external_id: Optional client-provided correlation ID (``get_run_by_external_id``)
 
         Returns:
-            The workflow run (completed if sync=True)
+            The workflow run (ended, if it did so within the timeout and sync=True)
 
         Example:
             # Simple run
@@ -154,26 +202,34 @@ class WorkflowsClient:
             # Poll for status later
             run = client.workflows.get_run(run.id)
         """
-        workflow_uuid = _as_workflow_uuid(workflow_id)
-        if workflow_uuid is None:
-            # An endpoint name. There is no run-by-endpoint route, so resolve the name to the
-            # workflow's id first and run it by id.
-            workflow_uuid = self._resolve_endpoint(str(workflow_id))
+        body = _start_body(inputs, external_id)
+        run = WorkflowRun.from_api(self._start(workflow_id, body))
 
-        body = inputs or {}
-
-        # PUT /run waits for the run; /run/async starts it and answers at once.
-        path = _run_path(workflow_uuid) if sync else f"{_run_path(workflow_uuid)}/async"
-        response = self._http.put(path, json=body)
-
-        run = WorkflowRun.from_api(response)
-
-        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT):
+        if sync and not run.is_terminal:
             run = self._wait_for_completion(run.id, timeout_seconds)
 
         return run
 
-    def get_run(self, run_id: UUID | str) -> WorkflowRun:
+    def _start(self, workflow_id: Union[UUID, str], body: dict[str, Any]) -> dict[str, Any]:
+        workflow_uuid = _as_workflow_uuid(workflow_id)
+        try:
+            return self._http.post(_execute_path(workflow_id), json=body, params=_ASYNC)
+        except NotFoundError as e:
+            if workflow_uuid is None:
+                raise _endpoint_not_found(str(workflow_id), e) from e
+            # Perhaps a row id (Workflow.id) rather than the global id /execute/id/ takes.
+            global_id = self._global_id_of(workflow_uuid)
+            if global_id is None or global_id == workflow_uuid:
+                raise
+            return self._http.post(_execute_path(global_id), json=body, params=_ASYNC)
+
+    def _global_id_of(self, workflow_uuid: UUID) -> Optional[UUID]:
+        try:
+            return self.get(workflow_uuid).global_unique_id
+        except WorkStudioError:
+            return None
+
+    def get_run(self, run_id: Union[UUID, str]) -> WorkflowRun:
         """
         Get a workflow run by ID.
 
@@ -183,7 +239,7 @@ class WorkflowsClient:
         Returns:
             The workflow run
         """
-        response = self._http.get(f"{RUN_PATH}/{run_id}")
+        response = self._http.get(f"{RUN_PATH}/{_segment(run_id)}")
         return WorkflowRun.from_api(response)
 
     def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
@@ -194,27 +250,30 @@ class WorkflowsClient:
             external_id: The client-provided external ID
 
         Returns:
-            The workflow run, or None if not found
+            The workflow run, or None if there is no such run
+
+        Raises:
+            WorkStudioError: For any other failure (a refused key, a server error)
         """
         try:
-            response = self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
-            return WorkflowRun.from_api(response)
-        except Exception:
+            response = self._http.get(f"{RUN_PATH}/by-external-id/{_segment(external_id)}")
+        except NotFoundError:
             return None
+        return WorkflowRun.from_api(response)
 
     def list_runs(
         self,
         page: int = 0,
         size: int = 20,
-        workflow_id: Optional[UUID | str] = None,
-    ) -> tuple[list[WorkflowRun], PageInfo]:
+        workflow_id: Optional[Union[UUID, str]] = None,
+    ) -> tuple[List[WorkflowRun], PageInfo]:
         """
         List workflow runs.
 
         Args:
             page: Page number (0-indexed)
             size: Number of items per page
-            workflow_id: Optional filter by workflow ID
+            workflow_id: Optional filter by workflow ID (the workflow's row id)
 
         Returns:
             Tuple of (runs list, page info)
@@ -223,12 +282,8 @@ class WorkflowsClient:
         if workflow_id:
             params["workflowId"] = str(workflow_id)
 
-        response = self._http.get(RUN_PATH, params=params)
-
-        runs = [WorkflowRun.from_api(r) for r in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return runs, page_info
+        items, page_info = parse_page(self._http.get(RUN_PATH, params=params))
+        return [WorkflowRun.from_api(r) for r in items], page_info
 
     def _wait_for_completion(
         self,
@@ -236,21 +291,31 @@ class WorkflowsClient:
         timeout_seconds: int,
         poll_interval: float = 1.0,
     ) -> WorkflowRun:
-        """Wait for a workflow run to complete."""
-        start_time = time.time()
-        terminal_states = {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT}
+        """Wait for a workflow run to end, long-polling ``/run/{id}/wait``."""
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        run: Optional[WorkflowRun] = None
 
         while True:
-            run = self.get_run(run_id)
-            if run.status in terminal_states:
-                return run
-
-            elapsed = time.time() - start_time
-            if elapsed >= timeout_seconds:
+            remaining = deadline - time.monotonic()
+            if remaining < 1.0:
                 # Return current state even if not complete
-                return run
+                return run if run is not None else self.get_run(run_id)
 
-            time.sleep(min(poll_interval, timeout_seconds - elapsed))
+            wait_seconds = min(remaining, LONG_POLL_MAX_SECONDS)
+            began = time.monotonic()
+            # 200: the run ended. 408: still going, with the run as it stands.
+            body = self._http.request(
+                "POST",
+                f"{RUN_PATH}/{_segment(run_id)}/wait",
+                params=_wait_params(wait_seconds),
+                ok_statuses=(408,),
+                timeout=wait_seconds + _WAIT_HTTP_MARGIN_SECONDS,
+            )
+            run = WorkflowRun.from_api(body) if body else self.get_run(run_id)
+            if run.is_terminal:
+                return run
+            if time.monotonic() - began < poll_interval:
+                time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
 
 class AsyncWorkflowsClient:
@@ -265,90 +330,86 @@ class AsyncWorkflowsClient:
         size: int = 20,
         search: Optional[str] = None,
     ) -> tuple[list[Workflow], PageInfo]:
-        """List all workflows."""
+        """List all workflows (organization keys only)."""
         params: dict[str, Any] = {"page": page, "size": size}
         if search:
             params["search"] = search
 
-        response = await self._http.get(PORTAL_PATH, params=params)
+        items, page_info = parse_page(await self._http.get(PORTAL_PATH, params=params))
+        return [Workflow.model_validate(w) for w in items], page_info
 
-        workflows = [Workflow.model_validate(w) for w in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return workflows, page_info
-
-    async def get(self, workflow_id: UUID | str) -> Workflow:
+    async def get(self, workflow_id: Union[UUID, str]) -> Workflow:
         """Get a workflow by ID."""
-        response = await self._http.get(f"{PORTAL_PATH}/{workflow_id}")
+        response = await self._http.get(f"{PORTAL_PATH}/{_segment(workflow_id)}")
         return Workflow.model_validate(response)
 
     async def get_by_endpoint(self, endpoint: str) -> Workflow:
         """Get a workflow by its endpoint name."""
-        response = await self._http.get(f"{PORTAL_PATH}/by-endpoint/{endpoint}")
+        response = await self._http.get(f"{PORTAL_PATH}/by-endpoint/{_segment(endpoint)}")
         return Workflow.model_validate(response)
-
-    async def _resolve_endpoint(self, endpoint: str) -> UUID:
-        """The id of the workflow with this endpoint name; NotFoundError when there is none."""
-        try:
-            return (await self.get_by_endpoint(endpoint)).id
-        except NotFoundError as e:
-            raise _endpoint_not_found(endpoint, e) from e
 
     async def run(
         self,
-        workflow_id: UUID | str,
+        workflow_id: Union[UUID, str],
         inputs: Optional[dict[str, Any]] = None,
         *,
         sync: bool = True,
         timeout_seconds: int = 300,
         external_id: Optional[str] = None,
     ) -> WorkflowRun:
-        """Run a workflow."""
-        workflow_uuid = _as_workflow_uuid(workflow_id)
-        if workflow_uuid is None:
-            # An endpoint name: resolve it to the workflow's id, then run by id.
-            workflow_uuid = await self._resolve_endpoint(str(workflow_id))
+        """Run a workflow (see :meth:`WorkflowsClient.run`)."""
+        body = _start_body(inputs, external_id)
+        run = WorkflowRun.from_api(await self._start(workflow_id, body))
 
-        body = inputs or {}
-        path = _run_path(workflow_uuid) if sync else f"{_run_path(workflow_uuid)}/async"
-        response = await self._http.put(path, json=body)
-        run = WorkflowRun.from_api(response)
-
-        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT):
+        if sync and not run.is_terminal:
             run = await self._wait_for_completion(run.id, timeout_seconds)
 
         return run
 
-    async def get_run(self, run_id: UUID | str) -> WorkflowRun:
+    async def _start(self, workflow_id: Union[UUID, str], body: dict[str, Any]) -> dict[str, Any]:
+        workflow_uuid = _as_workflow_uuid(workflow_id)
+        try:
+            return await self._http.post(_execute_path(workflow_id), json=body, params=_ASYNC)
+        except NotFoundError as e:
+            if workflow_uuid is None:
+                raise _endpoint_not_found(str(workflow_id), e) from e
+            global_id = await self._global_id_of(workflow_uuid)
+            if global_id is None or global_id == workflow_uuid:
+                raise
+            return await self._http.post(_execute_path(global_id), json=body, params=_ASYNC)
+
+    async def _global_id_of(self, workflow_uuid: UUID) -> Optional[UUID]:
+        try:
+            return (await self.get(workflow_uuid)).global_unique_id
+        except WorkStudioError:
+            return None
+
+    async def get_run(self, run_id: Union[UUID, str]) -> WorkflowRun:
         """Get a workflow run by ID."""
-        response = await self._http.get(f"{RUN_PATH}/{run_id}")
+        response = await self._http.get(f"{RUN_PATH}/{_segment(run_id)}")
         return WorkflowRun.from_api(response)
 
     async def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
-        """Get a workflow run by external correlation ID."""
+        """Get a workflow run by external correlation ID; None if there is no such run."""
         try:
-            response = await self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
-            return WorkflowRun.from_api(response)
-        except Exception:
+            response = await self._http.get(f"{RUN_PATH}/by-external-id/{_segment(external_id)}")
+        except NotFoundError:
             return None
+        return WorkflowRun.from_api(response)
 
     async def list_runs(
         self,
         page: int = 0,
         size: int = 20,
-        workflow_id: Optional[UUID | str] = None,
-    ) -> tuple[list[WorkflowRun], PageInfo]:
+        workflow_id: Optional[Union[UUID, str]] = None,
+    ) -> tuple[List[WorkflowRun], PageInfo]:
         """List workflow runs."""
         params: dict[str, Any] = {"page": page, "size": size}
         if workflow_id:
             params["workflowId"] = str(workflow_id)
 
-        response = await self._http.get(RUN_PATH, params=params)
-
-        runs = [WorkflowRun.from_api(r) for r in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return runs, page_info
+        items, page_info = parse_page(await self._http.get(RUN_PATH, params=params))
+        return [WorkflowRun.from_api(r) for r in items], page_info
 
     async def _wait_for_completion(
         self,
@@ -356,19 +417,26 @@ class AsyncWorkflowsClient:
         timeout_seconds: int,
         poll_interval: float = 1.0,
     ) -> WorkflowRun:
-        """Wait for a workflow run to complete."""
-        import asyncio
-
-        start_time = time.time()
-        terminal_states = {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT}
+        """Wait for a workflow run to end, long-polling ``/run/{id}/wait``."""
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        run: Optional[WorkflowRun] = None
 
         while True:
-            run = await self.get_run(run_id)
-            if run.status in terminal_states:
-                return run
+            remaining = deadline - time.monotonic()
+            if remaining < 1.0:
+                return run if run is not None else await self.get_run(run_id)
 
-            elapsed = time.time() - start_time
-            if elapsed >= timeout_seconds:
+            wait_seconds = min(remaining, LONG_POLL_MAX_SECONDS)
+            began = time.monotonic()
+            body = await self._http.request(
+                "POST",
+                f"{RUN_PATH}/{_segment(run_id)}/wait",
+                params=_wait_params(wait_seconds),
+                ok_statuses=(408,),
+                timeout=wait_seconds + _WAIT_HTTP_MARGIN_SECONDS,
+            )
+            run = WorkflowRun.from_api(body) if body else await self.get_run(run_id)
+            if run.is_terminal:
                 return run
-
-            await asyncio.sleep(min(poll_interval, timeout_seconds - elapsed))
+            if time.monotonic() - began < poll_interval:
+                await asyncio.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))

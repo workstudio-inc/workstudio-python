@@ -2,7 +2,8 @@
 Internal HTTP client for the work.studio SDK.
 """
 
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, Optional, TypeVar
+
 import httpx
 
 from workstudio.exceptions import (
@@ -19,6 +20,22 @@ T = TypeVar("T")
 
 DEFAULT_BASE_URL = "https://api.work.studio"
 DEFAULT_TIMEOUT = 30.0
+
+
+
+def _message(body: Any, default: str) -> str:
+    """
+    The explanation in an error reply.
+
+    Platform errors carry it as ``message`` (and ``error``/``detail`` in some handlers); an agent
+    message reply carries ``errorMessage``. A body that is not a JSON object has none.
+    """
+    if isinstance(body, dict):
+        for key in ("message", "errorMessage", "detail", "error"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return default
 
 
 class HTTPClient:
@@ -61,6 +78,8 @@ class HTTPClient:
         params: Optional[dict[str, Any]] = None,
         json: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
+        ok_statuses: tuple[int, ...] = (),
+        timeout: Optional[float] = None,
     ) -> dict[str, Any]:
         """Make an HTTP request and return the JSON response."""
         try:
@@ -70,7 +89,11 @@ class HTTPClient:
                 params=params,
                 json=json,
                 headers=headers,
+                timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
             )
+            if response.status_code in ok_statuses:
+                body = self._safe_json(response)
+                return body if isinstance(body, dict) else {}
             return self._handle_response(response)
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out: {e}")
@@ -88,14 +111,16 @@ class HTTPClient:
 
         if response.status_code == 403:
             raise AuthenticationError(
-                message="Access denied - insufficient permissions",
+                message=_message(
+                    self._safe_json(response), "Access denied - insufficient permissions"
+                ),
                 status_code=403,
                 response_body=self._safe_json(response),
             )
 
         if response.status_code == 404:
             body = self._safe_json(response)
-            message = body.get("message", "Resource not found") if body else "Resource not found"
+            message = _message(body, "Resource not found")
             raise NotFoundError(
                 message=message,
                 status_code=404,
@@ -104,8 +129,8 @@ class HTTPClient:
 
         if response.status_code == 400:
             body = self._safe_json(response)
-            message = body.get("message", "Validation error") if body else "Validation error"
-            errors = body.get("errors", []) if body else []
+            message = _message(body, "Validation error")
+            errors = body.get("errors", []) if isinstance(body, dict) else []
             raise ValidationError(
                 message=message,
                 status_code=400,
@@ -124,7 +149,7 @@ class HTTPClient:
 
         if response.status_code >= 500:
             body = self._safe_json(response)
-            message = body.get("message", "Internal server error") if body else "Internal server error"
+            message = _message(body, "Internal server error")
             raise APIError(
                 message=message,
                 status_code=response.status_code,
@@ -133,7 +158,7 @@ class HTTPClient:
 
         if response.status_code >= 400:
             body = self._safe_json(response)
-            message = body.get("message", f"HTTP {response.status_code}") if body else f"HTTP {response.status_code}"
+            message = _message(body, f"HTTP {response.status_code}")
             raise APIError(
                 message=message,
                 status_code=response.status_code,
@@ -145,7 +170,7 @@ class HTTPClient:
             return {}
         return response.json()
 
-    def _safe_json(self, response: httpx.Response) -> Optional[dict[str, Any]]:
+    def _safe_json(self, response: httpx.Response) -> Any:
         """Safely parse JSON from response, returning None on failure."""
         try:
             return response.json()
@@ -231,6 +256,8 @@ class AsyncHTTPClient:
         params: Optional[dict[str, Any]] = None,
         json: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
+        ok_statuses: tuple[int, ...] = (),
+        timeout: Optional[float] = None,
     ) -> dict[str, Any]:
         """Make an async HTTP request and return the JSON response."""
         try:
@@ -240,7 +267,11 @@ class AsyncHTTPClient:
                 params=params,
                 json=json,
                 headers=headers,
+                timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
             )
+            if response.status_code in ok_statuses:
+                body = self._safe_json(response)
+                return body if isinstance(body, dict) else {}
             return self._handle_response(response)
         except httpx.TimeoutException as e:
             raise TimeoutError(f"Request timed out: {e}")
@@ -259,14 +290,16 @@ class AsyncHTTPClient:
 
         if response.status_code == 403:
             raise AuthenticationError(
-                message="Access denied - insufficient permissions",
+                message=_message(
+                    self._safe_json(response), "Access denied - insufficient permissions"
+                ),
                 status_code=403,
                 response_body=self._safe_json(response),
             )
 
         if response.status_code == 404:
             body = self._safe_json(response)
-            message = body.get("message", "Resource not found") if body else "Resource not found"
+            message = _message(body, "Resource not found")
             raise NotFoundError(
                 message=message,
                 status_code=404,
@@ -275,8 +308,8 @@ class AsyncHTTPClient:
 
         if response.status_code == 400:
             body = self._safe_json(response)
-            message = body.get("message", "Validation error") if body else "Validation error"
-            errors = body.get("errors", []) if body else []
+            message = _message(body, "Validation error")
+            errors = body.get("errors", []) if isinstance(body, dict) else []
             raise ValidationError(
                 message=message,
                 status_code=400,
@@ -295,7 +328,7 @@ class AsyncHTTPClient:
 
         if response.status_code >= 500:
             body = self._safe_json(response)
-            message = body.get("message", "Internal server error") if body else "Internal server error"
+            message = _message(body, "Internal server error")
             raise APIError(
                 message=message,
                 status_code=response.status_code,
@@ -304,7 +337,7 @@ class AsyncHTTPClient:
 
         if response.status_code >= 400:
             body = self._safe_json(response)
-            message = body.get("message", f"HTTP {response.status_code}") if body else f"HTTP {response.status_code}"
+            message = _message(body, f"HTTP {response.status_code}")
             raise APIError(
                 message=message,
                 status_code=response.status_code,
@@ -315,7 +348,7 @@ class AsyncHTTPClient:
             return {}
         return response.json()
 
-    def _safe_json(self, response: httpx.Response) -> Optional[dict[str, Any]]:
+    def _safe_json(self, response: httpx.Response) -> Any:
         """Safely parse JSON from response."""
         try:
             return response.json()
