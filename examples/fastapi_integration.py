@@ -75,7 +75,7 @@ async def run_workflow(request: WorkflowRunRequest):
         )
         return {
             "run_id": str(result.id),
-            "status": result.status.value,
+            "status": result.raw_status,
             "outputs": result.outputs,
             "duration_ms": result.duration_ms,
         }
@@ -88,7 +88,7 @@ async def run_workflow(request: WorkflowRunRequest):
 @app.get("/agents")
 async def list_agents():
     """List all published agents."""
-    agents, _ = await client.agents.list(status="PUBLISHED")
+    agents, _ = await client.agents.list(active=True)
     return {
         "agents": [
             {"id": str(a.id), "name": a.name, "description": a.description}

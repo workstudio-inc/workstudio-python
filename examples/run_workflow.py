@@ -56,13 +56,14 @@ print(f"Initial status: {run.status}")
 
 # Poll for completion
 import time
-while run.status in ("PENDING", "RUNNING"):
+while not run.is_terminal:
     time.sleep(2)
     run = client.workflows.get_run(run.id)
-    print(f"Status: {run.status}")
+    print(f"Status: {run.raw_status}")
 
-print(f"Final status: {run.status}")
-if run.outputs:
-    print(f"Results: {run.outputs}")
+print(f"Final status: {run.raw_status}")
+# A polled run carries a link to its result rather than the result itself.
+if run.final_output_url:
+    print(f"Result: {run.final_output_url}")
 
 client.close()

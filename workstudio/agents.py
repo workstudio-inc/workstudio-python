@@ -1,23 +1,63 @@
 """
 Agents module for the work.studio SDK.
+
+Routes (under ``/api/v1/workflow``):
+
+- ``/catalog/ai-agents`` (catalog ``AIAgentUnifiedController``): list, ``/by-id/{id}``,
+  ``/{globalUniqueId}``. Organization keys with ``catalog:read``; customer keys get 403. Served by
+  the monolith.
+- ``/ai-runtime/agent-conversation/sessions`` (ai-runtime ``AgentConversationController``): start
+  (POST), ``/{id}/messages`` (POST), state (GET ``/{id}``), end (DELETE ``/{id}``). Keys need
+  ``agent:execute`` (state: ``agent:read`` or ``agent:execute``). Prod routes
+  ``/api/v1/workflow/ai-runtime/*`` to the ai-runtime service.
 """
 
-from typing import Any, Optional
+import warnings
+from typing import Any, Optional, Union
 from uuid import UUID
 
-from workstudio._http import HTTPClient, AsyncHTTPClient
+from workstudio._http import AsyncHTTPClient, HTTPClient
+from workstudio.exceptions import NotFoundError
 from workstudio.models import (
     Agent,
     AgentSession,
     MessageResponse,
     PageInfo,
+    parse_page,
 )
-
 
 # API paths
 API_PREFIX = "/api/v1/workflow"
 CATALOG_PATH = f"{API_PREFIX}/catalog/ai-agents"
 AI_RUNTIME_PATH = f"{API_PREFIX}/ai-runtime/agent-conversation"
+
+#: How many agents a name lookup reads (the catalog search is a substring match).
+_NAME_LOOKUP_PAGE_SIZE = 50
+
+
+def _list_params(
+    page: int, size: int, search: Optional[str], status: Optional[str], active: Optional[bool]
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"page": page, "size": size}
+    if search:
+        params["search"] = search
+    if status:
+        # The catalog has no status filter (it ignored this parameter); it has ``active``.
+        warnings.warn(
+            "agents.list(status=...) has no effect: the platform does not filter agents by status. "
+            "Use active=True/False.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    if active is not None:
+        params["active"] = "true" if active else "false"
+    return params
+
+
+def _message_body(message: str) -> dict[str, Any]:
+    # ai-runtime TestMessageRequest: message, context, activeSkillIds. There is no includeDebug: a
+    # session reports tool and knowledge-base details on every message (debugMode defaults to true).
+    return {"message": message}
 
 
 class LiveSession:
@@ -58,7 +98,8 @@ class LiveSession:
 
         Args:
             message: The message to send
-            include_debug: Include debug information in response
+            include_debug: Kept for compatibility; the platform reports tool and knowledge-base
+                details on every message, so it has no effect
 
         Returns:
             The agent's response with metrics
@@ -68,10 +109,7 @@ class LiveSession:
 
         response = self._http.post(
             f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/messages",
-            json={
-                "message": message,
-                "includeDebug": include_debug,
-            },
+            json=_message_body(message),
         )
         return MessageResponse.model_validate(response)
 
@@ -84,7 +122,7 @@ class LiveSession:
         """End this session."""
         if not self._closed:
             try:
-                self._http.post(f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/end")
+                self._http.delete(f"{AI_RUNTIME_PATH}/sessions/{self.session_id}")
             except Exception:
                 pass  # Best effort
             self._closed = True
@@ -123,10 +161,7 @@ class AsyncLiveSession:
 
         response = await self._http.post(
             f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/messages",
-            json={
-                "message": message,
-                "includeDebug": include_debug,
-            },
+            json=_message_body(message),
         )
         return MessageResponse.model_validate(response)
 
@@ -139,7 +174,7 @@ class AsyncLiveSession:
         """End this session."""
         if not self._closed:
             try:
-                await self._http.post(f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/end")
+                await self._http.delete(f"{AI_RUNTIME_PATH}/sessions/{self.session_id}")
             except Exception:
                 pass
             self._closed = True
@@ -163,6 +198,7 @@ class AgentsClient:
         size: int = 20,
         search: Optional[str] = None,
         status: Optional[str] = None,
+        active: Optional[bool] = None,
     ) -> tuple[list[Agent], PageInfo]:
         """
         List all agents.
@@ -171,35 +207,28 @@ class AgentsClient:
             page: Page number (0-indexed)
             size: Number of items per page
             search: Optional search query
-            status: Filter by status (DRAFT, PUBLISHED, ARCHIVED)
+            status: Deprecated, has no effect (the platform has no agent status filter)
+            active: Only active (True) or inactive (False) agents
 
         Returns:
             Tuple of (agents list, page info)
 
         Example:
-            agents, _ = client.agents.list(status="PUBLISHED")
+            agents, _ = client.agents.list(active=True)
             for agent in agents:
                 print(f"{agent.name}: {agent.description}")
         """
-        params: dict[str, Any] = {"page": page, "size": size}
-        if search:
-            params["search"] = search
-        if status:
-            params["status"] = status
+        params = _list_params(page, size, search, status, active)
 
-        response = self._http.get(CATALOG_PATH, params=params)
+        items, page_info = parse_page(self._http.get(CATALOG_PATH, params=params))
+        return [Agent.model_validate(a) for a in items], page_info
 
-        agents = [Agent.model_validate(a) for a in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return agents, page_info
-
-    def get(self, agent_id: UUID | str) -> Agent:
+    def get(self, agent_id: Union[UUID, str]) -> Agent:
         """
         Get an agent by ID.
 
         Args:
-            agent_id: The agent UUID
+            agent_id: The agent id (``Agent.id``) or its global unique id
 
         Returns:
             The agent
@@ -207,7 +236,11 @@ class AgentsClient:
         Raises:
             NotFoundError: If agent not found
         """
-        response = self._http.get(f"{CATALOG_PATH}/{agent_id}")
+        # /{id} on the catalog is the GLOBAL id; Agent.id is the row id, read by /by-id/{id}.
+        try:
+            response = self._http.get(f"{CATALOG_PATH}/by-id/{agent_id}")
+        except NotFoundError:
+            response = self._http.get(f"{CATALOG_PATH}/{agent_id}")
         return Agent.model_validate(response)
 
     def get_by_name(self, name: str) -> Optional[Agent]:
@@ -220,7 +253,7 @@ class AgentsClient:
         Returns:
             The agent, or None if not found
         """
-        agents, _ = self.list(search=name, size=1)
+        agents, _ = self.list(search=name, size=_NAME_LOOKUP_PAGE_SIZE)
         for agent in agents:
             if agent.name.lower() == name.lower():
                 return agent
@@ -228,7 +261,7 @@ class AgentsClient:
 
     def create_session(
         self,
-        agent_id: UUID | str,
+        agent_id: Union[UUID, str],
     ) -> LiveSession:
         """
         Create a new conversation session with an agent.
@@ -254,7 +287,6 @@ class AgentsClient:
             # It's a name, look it up
             agent = self.get_by_name(str(agent_id))
             if not agent:
-                from workstudio.exceptions import NotFoundError
                 raise NotFoundError(f"Agent not found: {agent_id}")
             resolved_id = agent.id
             agent_name = agent.name
@@ -275,7 +307,7 @@ class AgentsClient:
 
     def chat(
         self,
-        agent_id: UUID | str,
+        agent_id: Union[UUID, str],
         message: str,
         include_debug: bool = False,
     ) -> MessageResponse:
@@ -316,29 +348,25 @@ class AsyncAgentsClient:
         size: int = 20,
         search: Optional[str] = None,
         status: Optional[str] = None,
+        active: Optional[bool] = None,
     ) -> tuple[list[Agent], PageInfo]:
         """List all agents."""
-        params: dict[str, Any] = {"page": page, "size": size}
-        if search:
-            params["search"] = search
-        if status:
-            params["status"] = status
+        params = _list_params(page, size, search, status, active)
 
-        response = await self._http.get(CATALOG_PATH, params=params)
+        items, page_info = parse_page(await self._http.get(CATALOG_PATH, params=params))
+        return [Agent.model_validate(a) for a in items], page_info
 
-        agents = [Agent.model_validate(a) for a in response.get("content", [])]
-        page_info = PageInfo.model_validate(response.get("pageInfo", {}))
-
-        return agents, page_info
-
-    async def get(self, agent_id: UUID | str) -> Agent:
+    async def get(self, agent_id: Union[UUID, str]) -> Agent:
         """Get an agent by ID."""
-        response = await self._http.get(f"{CATALOG_PATH}/{agent_id}")
+        try:
+            response = await self._http.get(f"{CATALOG_PATH}/by-id/{agent_id}")
+        except NotFoundError:
+            response = await self._http.get(f"{CATALOG_PATH}/{agent_id}")
         return Agent.model_validate(response)
 
     async def get_by_name(self, name: str) -> Optional[Agent]:
         """Get an agent by name."""
-        agents, _ = await self.list(search=name, size=1)
+        agents, _ = await self.list(search=name, size=_NAME_LOOKUP_PAGE_SIZE)
         for agent in agents:
             if agent.name.lower() == name.lower():
                 return agent
@@ -346,7 +374,7 @@ class AsyncAgentsClient:
 
     async def create_session(
         self,
-        agent_id: UUID | str,
+        agent_id: Union[UUID, str],
     ) -> AsyncLiveSession:
         """Create a new conversation session with an agent."""
         resolved_id: UUID
@@ -357,7 +385,6 @@ class AsyncAgentsClient:
         except ValueError:
             agent = await self.get_by_name(str(agent_id))
             if not agent:
-                from workstudio.exceptions import NotFoundError
                 raise NotFoundError(f"Agent not found: {agent_id}")
             resolved_id = agent.id
             agent_name = agent.name
@@ -378,7 +405,7 @@ class AsyncAgentsClient:
 
     async def chat(
         self,
-        agent_id: UUID | str,
+        agent_id: Union[UUID, str],
         message: str,
         include_debug: bool = False,
     ) -> MessageResponse:

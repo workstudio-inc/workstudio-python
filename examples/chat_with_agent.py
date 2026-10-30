@@ -14,7 +14,7 @@ client = Client()  # Uses WORKSTUDIO_API_KEY env var
 
 # Example 1: List published agents
 print("=== Available Agents ===")
-agents, _ = client.agents.list(status="PUBLISHED")
+agents, _ = client.agents.list(active=True)
 for agent in agents:
     print(f"  - {agent.name}: {agent.description}")
 
