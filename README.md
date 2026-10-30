@@ -25,6 +25,10 @@ client = Client()
 
 ### List workflows
 
+Listing and reading workflow definitions needs an organization key (`svx_tk_...`) with
+**View Automation** or **Run Automation**; a customer key (`svx_ck_...`) gets 403. With **Run
+Automation** only, each workflow comes back as a summary (id, global id, name, endpoint, inputs).
+
 ```python
 workflows, page_info = client.workflows.list()
 for wf in workflows:
@@ -37,23 +41,34 @@ print(f"Total: {page_info.total_elements}")
 
 ### Run a workflow
 
-```python
-# By ID
-result = client.workflows.run(
-    "550e8400-e29b-41d4-a716-446655440000",
-    inputs={"file_url": "https://example.com/invoice.pdf"}
-)
+`run()` starts the workflow's published version with `POST /api/v1/workflow/execute/{endpoint}`
+(or `/execute/id/{global-id}`) and waits for it with `POST /run/{id}/wait`. Any key with **Run
+Automation** may run workflows, a customer key included (it always runs for its own customer).
 
+```python
 # By endpoint name
 result = client.workflows.run(
     "invoice-processor",
     inputs={"file_url": "https://example.com/invoice.pdf"}
 )
 
+# By the workflow's global unique id (Designer shows it under API). With an organization key,
+# the id from workflows.list() / workflows.get() works too.
+result = client.workflows.run(
+    "550e8400-e29b-41d4-a716-446655440000",
+    inputs={"file_url": "https://example.com/invoice.pdf"}
+)
+
 # Check result
-print(f"Status: {result.status}")
+print(f"Status: {result.status} ({result.raw_status})")  # RunStatus.COMPLETED (FINISHED)
 print(f"Outputs: {result.outputs}")
+print(f"Full result: {result.final_output_url}")  # short-lived link, fetch without your key
 ```
+
+`status` is a `RunStatus`. The platform's statuses map onto it: `FINISHED` is `COMPLETED`,
+`WAITING_HUMAN` is `WAITING`, `QUEUED` and `PARSING` are `PENDING`, `TERMINATED` is `CANCELLED`;
+`raw_status` keeps the platform's word. A run still going after `timeout_seconds` (default 300) is
+returned as it stands.
 
 ### Async workflow execution
 
@@ -65,14 +80,26 @@ print(f"Started run: {run.id}")
 # Poll for status later
 run = client.workflows.get_run(run.id)
 print(f"Status: {run.status}")
+
+# Correlate with your own id
+run = client.workflows.run("invoice-processor", sync=False, external_id="po-1234")
+run = client.workflows.get_run_by_external_id("po-1234")  # None if there is no such run
+
+# Recent runs
+runs, page_info = client.workflows.list_runs(size=10)
 ```
 
+A key with only **Run Automation** reads the runs it started.
+
 ## Agents
+
+Agents need an organization key: listing and reading them needs `catalog:read`, sessions need
+`agent:execute`. A customer key cannot look agents up by name.
 
 ### List agents
 
 ```python
-agents, _ = client.agents.list(status="PUBLISHED")
+agents, _ = client.agents.list(active=True)
 for agent in agents:
     print(f"{agent.name}: {agent.description}")
 ```
@@ -182,8 +209,8 @@ except APIError as e:
 
 | Type | Format | Use Case |
 |------|--------|----------|
-| Customer Key | `svx_ck_...` | External integrations, scoped to a specific context |
-| Tenant Key | `svx_tk_...` | Backend services, full tenant access |
+| Customer Key | `svx_ck_...` | Runs workflows for one customer; cannot read definitions or agents |
+| Tenant Key | `svx_tk_...` | Backend services: runs, definitions, agents (per its permissions) |
 
 Get your API key from the [Designer](https://designer.work.studio) → API Keys page.
 
