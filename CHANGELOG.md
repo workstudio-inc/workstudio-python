@@ -2,7 +2,7 @@
 
 All notable changes to the work.studio Python SDK are recorded here.
 
-## Unreleased
+## 0.2.0 - 2026-10-30
 
 A contract audit of every public method against the platform's routes and reply shapes
 (server code at origin/main, 2026-10-30). See `RELEASE-NOTES-sdk-contract-fixes.md` for the full
@@ -53,7 +53,7 @@ table, the evidence, and what is breaking.
   not a JSON object no longer raises `AttributeError`.
 - Python 3.9: the package imports again (`UUID | str` annotations raised `TypeError`).
 
-### Changed
+### Changed (behaviour callers may notice)
 
 - `agents.list(status=...)` has no effect (the platform has no such filter; 0.1 sent a parameter it
   ignored) and warns. Use the new `active=True/False`.

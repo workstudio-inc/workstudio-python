@@ -1,8 +1,8 @@
 # workstudio (Python SDK): contract fixes - release notes
 
-Branch `sdk-contract-fixes`, built on `sdk-run-by-name` (a043c94) with `release-next`
-(fix-portal-run-reply, b4b9042) merged in. Not versioned, tagged or published: the version bump and
-tag go to the owner for a GO. A `v*` tag publishes to PyPI.
+**Version 0.2.0** (2026-10-30). Branch `sdk-contract-fixes`, built on `sdk-run-by-name` (a043c94)
+with `release-next` (fix-portal-run-reply, b4b9042) merged in. A `v*` tag publishes to PyPI; b5 tags
+(runbook internal-docs `runbooks/sdk-release-1030.md`).
 
 ## What was broken, and since when
 

@@ -65,7 +65,7 @@ class HTTPClient:
             "X-API-Key": self.api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "workstudio-python/0.1.0",
+            "User-Agent": "workstudio-python/0.2.0",
         }
         if self.scope_id:
             headers["X-SCOPE-KEY"] = self.scope_id
@@ -243,7 +243,7 @@ class AsyncHTTPClient:
             "X-API-Key": self.api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "workstudio-python/0.1.0",
+            "User-Agent": "workstudio-python/0.2.0",
         }
         if self.scope_id:
             headers["X-SCOPE-KEY"] = self.scope_id
