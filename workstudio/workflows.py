@@ -7,6 +7,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from workstudio._http import HTTPClient, AsyncHTTPClient
+from workstudio.exceptions import NotFoundError
 from workstudio.models import (
     PageInfo,
     RunStatus,
@@ -19,6 +20,29 @@ from workstudio.models import (
 API_PREFIX = "/api/v1/workflow"
 PORTAL_PATH = f"{API_PREFIX}/portal"
 RUN_PATH = f"{API_PREFIX}/run"
+
+
+def _as_workflow_uuid(workflow_id: UUID | str) -> Optional[UUID]:
+    """The workflow id as a UUID, or None when it is an endpoint name."""
+    if isinstance(workflow_id, UUID):
+        return workflow_id
+    try:
+        return UUID(str(workflow_id))
+    except ValueError:
+        return None
+
+
+def _run_path(workflow_id: UUID) -> str:
+    """The portal route that runs a workflow by its id (row id or global id)."""
+    return f"{PORTAL_PATH}/{workflow_id}/run"
+
+
+def _endpoint_not_found(endpoint: str, cause: NotFoundError) -> NotFoundError:
+    return NotFoundError(
+        message=f"No workflow with endpoint '{endpoint}' was found: {cause.message}",
+        status_code=cause.status_code or 404,
+        response_body=cause.response_body,
+    )
 
 
 class WorkflowsClient:
@@ -92,6 +116,13 @@ class WorkflowsClient:
         response = self._http.get(f"{PORTAL_PATH}/by-endpoint/{endpoint}")
         return Workflow.model_validate(response)
 
+    def _resolve_endpoint(self, endpoint: str) -> UUID:
+        """The id of the workflow with this endpoint name; NotFoundError when there is none."""
+        try:
+            return self.get_by_endpoint(endpoint).id
+        except NotFoundError as e:
+            raise _endpoint_not_found(endpoint, e) from e
+
     def run(
         self,
         workflow_id: UUID | str,
@@ -123,18 +154,16 @@ class WorkflowsClient:
             # Poll for status later
             run = client.workflows.get_run(run.id)
         """
-        # Determine if workflow_id is UUID or endpoint
-        try:
-            UUID(str(workflow_id))
-            path = f"{PORTAL_PATH}/{workflow_id}/run"
-        except ValueError:
-            # It's an endpoint name
-            path = f"{PORTAL_PATH}/by-endpoint/{workflow_id}/run"
+        workflow_uuid = _as_workflow_uuid(workflow_id)
+        if workflow_uuid is None:
+            # An endpoint name. There is no run-by-endpoint route, so resolve the name to the
+            # workflow's id first and run it by id.
+            workflow_uuid = self._resolve_endpoint(str(workflow_id))
 
         body = inputs or {}
 
         # The portal endpoint uses PUT /run with body
-        response = self._http.put(path, json=body)
+        response = self._http.put(_run_path(workflow_uuid), json=body)
 
         run = WorkflowRun.model_validate(response)
 
@@ -257,6 +286,13 @@ class AsyncWorkflowsClient:
         response = await self._http.get(f"{PORTAL_PATH}/by-endpoint/{endpoint}")
         return Workflow.model_validate(response)
 
+    async def _resolve_endpoint(self, endpoint: str) -> UUID:
+        """The id of the workflow with this endpoint name; NotFoundError when there is none."""
+        try:
+            return (await self.get_by_endpoint(endpoint)).id
+        except NotFoundError as e:
+            raise _endpoint_not_found(endpoint, e) from e
+
     async def run(
         self,
         workflow_id: UUID | str,
@@ -267,14 +303,13 @@ class AsyncWorkflowsClient:
         external_id: Optional[str] = None,
     ) -> WorkflowRun:
         """Run a workflow."""
-        try:
-            UUID(str(workflow_id))
-            path = f"{PORTAL_PATH}/{workflow_id}/run"
-        except ValueError:
-            path = f"{PORTAL_PATH}/by-endpoint/{workflow_id}/run"
+        workflow_uuid = _as_workflow_uuid(workflow_id)
+        if workflow_uuid is None:
+            # An endpoint name: resolve it to the workflow's id, then run by id.
+            workflow_uuid = await self._resolve_endpoint(str(workflow_id))
 
         body = inputs or {}
-        response = await self._http.put(path, json=body)
+        response = await self._http.put(_run_path(workflow_uuid), json=body)
         run = WorkflowRun.model_validate(response)
 
         if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
