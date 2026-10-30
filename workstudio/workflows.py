@@ -162,12 +162,13 @@ class WorkflowsClient:
 
         body = inputs or {}
 
-        # The portal endpoint uses PUT /run with body
-        response = self._http.put(_run_path(workflow_uuid), json=body)
+        # PUT /run waits for the run; /run/async starts it and answers at once.
+        path = _run_path(workflow_uuid) if sync else f"{_run_path(workflow_uuid)}/async"
+        response = self._http.put(path, json=body)
 
-        run = WorkflowRun.model_validate(response)
+        run = WorkflowRun.from_api(response)
 
-        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT):
             run = self._wait_for_completion(run.id, timeout_seconds)
 
         return run
@@ -183,7 +184,7 @@ class WorkflowsClient:
             The workflow run
         """
         response = self._http.get(f"{RUN_PATH}/{run_id}")
-        return WorkflowRun.model_validate(response)
+        return WorkflowRun.from_api(response)
 
     def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
         """
@@ -197,7 +198,7 @@ class WorkflowsClient:
         """
         try:
             response = self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
-            return WorkflowRun.model_validate(response)
+            return WorkflowRun.from_api(response)
         except Exception:
             return None
 
@@ -224,7 +225,7 @@ class WorkflowsClient:
 
         response = self._http.get(RUN_PATH, params=params)
 
-        runs = [WorkflowRun.model_validate(r) for r in response.get("content", [])]
+        runs = [WorkflowRun.from_api(r) for r in response.get("content", [])]
         page_info = PageInfo.model_validate(response.get("pageInfo", {}))
 
         return runs, page_info
@@ -309,10 +310,11 @@ class AsyncWorkflowsClient:
             workflow_uuid = await self._resolve_endpoint(str(workflow_id))
 
         body = inputs or {}
-        response = await self._http.put(_run_path(workflow_uuid), json=body)
-        run = WorkflowRun.model_validate(response)
+        path = _run_path(workflow_uuid) if sync else f"{_run_path(workflow_uuid)}/async"
+        response = await self._http.put(path, json=body)
+        run = WorkflowRun.from_api(response)
 
-        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+        if sync and run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMED_OUT):
             run = await self._wait_for_completion(run.id, timeout_seconds)
 
         return run
@@ -320,13 +322,13 @@ class AsyncWorkflowsClient:
     async def get_run(self, run_id: UUID | str) -> WorkflowRun:
         """Get a workflow run by ID."""
         response = await self._http.get(f"{RUN_PATH}/{run_id}")
-        return WorkflowRun.model_validate(response)
+        return WorkflowRun.from_api(response)
 
     async def get_run_by_external_id(self, external_id: str) -> Optional[WorkflowRun]:
         """Get a workflow run by external correlation ID."""
         try:
             response = await self._http.get(f"{RUN_PATH}/by-external-id/{external_id}")
-            return WorkflowRun.model_validate(response)
+            return WorkflowRun.from_api(response)
         except Exception:
             return None
 
@@ -343,7 +345,7 @@ class AsyncWorkflowsClient:
 
         response = await self._http.get(RUN_PATH, params=params)
 
-        runs = [WorkflowRun.model_validate(r) for r in response.get("content", [])]
+        runs = [WorkflowRun.from_api(r) for r in response.get("content", [])]
         page_info = PageInfo.model_validate(response.get("pageInfo", {}))
 
         return runs, page_info

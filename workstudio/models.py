@@ -2,6 +2,7 @@
 Data models for the work.studio SDK.
 """
 
+import json
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
@@ -25,6 +26,37 @@ class RunStatus(str, Enum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     TIMED_OUT = "TIMED_OUT"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Optional["RunStatus"]:
+        """The run service's own words for these states (FINISHED, WAITING_HUMAN, QUEUED, ...)."""
+        if not isinstance(value, str):
+            return None
+        return _RUN_STATUS_ALIASES.get(value.strip().upper())
+
+
+# The statuses the run service reports, mapped onto the SDK's.
+_RUN_STATUS_ALIASES = {
+    "FINISHED": RunStatus.COMPLETED,
+    "SUCCESS": RunStatus.COMPLETED,
+    "SUCCEEDED": RunStatus.COMPLETED,
+    "QUEUED": RunStatus.PENDING,
+    "PARSING": RunStatus.PENDING,
+    "CREATED": RunStatus.PENDING,
+    "STARTED": RunStatus.RUNNING,
+    "WAITING_HUMAN": RunStatus.WAITING,
+    "WAITING_FOR_HUMAN": RunStatus.WAITING,
+    "WAITING_CALLBACK": RunStatus.WAITING,
+    "WAITING_FOR_CALLBACK": RunStatus.WAITING,
+    "WAITING_FOR_AGENT": RunStatus.WAITING,
+    "PAUSED": RunStatus.WAITING,
+    "ERROR": RunStatus.FAILED,
+    "TERMINATED": RunStatus.CANCELLED,
+    "CANCELED": RunStatus.CANCELLED,
+    "TIMEOUT": RunStatus.TIMED_OUT,
+}
+for _status in RunStatus:
+    _RUN_STATUS_ALIASES.setdefault(_status.value, _status)
 
 
 class AgentStatus(str, Enum):
@@ -95,6 +127,57 @@ class WorkflowRun(BaseResource):
 
     # External correlation
     external_id: Optional[str] = Field(default=None, alias="externalId")
+
+    # Where the run's full output and state can be fetched (signed, short-lived URLs)
+    final_output_url: Optional[str] = Field(default=None, alias="finalOutputUrl")
+    runtime_state_url: Optional[str] = Field(default=None, alias="runtimeStateUrl")
+
+    @classmethod
+    def from_api(cls, data: Any) -> "WorkflowRun":
+        """
+        A run from any of the API's run replies.
+
+        ``PUT /portal/{id}/run`` and ``/run/async`` answer ``{runStatus, executionResult}`` (the portal's
+        run-with-result shape), with the run id, the status and the run's state inside them; the run service's own
+        endpoints answer a run with ``id``, ``workflowId`` and ``status`` at the top. Both become a WorkflowRun.
+        """
+        if isinstance(data, dict) and ("runStatus" in data or "executionResult" in data) and not data.get("workflowId"):
+            data = _portal_run_reply(data)
+        return cls.model_validate(data)
+
+
+def _portal_run_reply(data: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the portal's ``{runStatus, executionResult}`` into a run's fields."""
+    status = data.get("runStatus") or {}
+    result = data.get("executionResult") or {}
+    state: Any = status.get("value")
+    if isinstance(state, str):
+        try:
+            state = json.loads(state)
+        except ValueError:
+            state = None
+    if not isinstance(state, dict):
+        state = {}
+
+    error = status.get("error") or state.get("error") or result.get("error")
+    if error is not None and not isinstance(error, str):
+        error = json.dumps(error)
+    response = state.get("response")
+    if response is not None and not isinstance(response, dict):
+        response = {"response": response}
+
+    return {
+        "id": result.get("runId") or status.get("routeRun") or state.get("runId") or data.get("id"),
+        "workflowId": result.get("workflowId") or state.get("workflowId"),
+        "workflowName": state.get("workflowName"),
+        "status": status.get("status") or state.get("currentState") or RunStatus.RUNNING.value,
+        "outputs": response,
+        "error": error,
+        "startedAt": state.get("startTime"),
+        "completedAt": state.get("endTime"),
+        "finalOutputUrl": result.get("finalOutputUrl"),
+        "runtimeStateUrl": result.get("runtimeStateUrl"),
+    }
 
 
 class WorkflowRunRequest(BaseModel):
