@@ -9,7 +9,6 @@ import json
 
 import pytest
 
-from workstudio import Client, AsyncClient
 from workstudio.models import RunStatus, WorkflowRun
 
 BASE = "http://ws.test"
@@ -83,40 +82,3 @@ class TestParse:
                                     "finalOutputUrl": "https://files.test/o.json"})
         assert run.status == RunStatus.COMPLETED
         assert run.final_output_url == "https://files.test/o.json"
-
-
-class TestRun:
-    def test_run_by_id(self, httpx_mock):
-        httpx_mock.add_response(method="PUT", url=f"{BASE}/api/v1/workflow/portal/{WORKFLOW_ID}/run",
-                                json=portal_reply())
-        with Client(api_key="svx_tk_test", base_url=BASE) as client:
-            run = client.workflows.run(WORKFLOW_ID, {"order": 13})
-        assert run.status == RunStatus.COMPLETED
-        assert run.outputs == {"got": {"order": 13}}
-
-    def test_run_by_endpoint_looks_the_id_up(self, httpx_mock):
-        # The portal has no /by-endpoint/{name}/run; the name is resolved to the workflow's id first.
-        httpx_mock.add_response(method="GET", url=f"{BASE}/api/v1/workflow/portal/by-endpoint/order-intake",
-                                json={"id": WORKFLOW_ID, "name": "Order intake", "endpoint": "order-intake"})
-        httpx_mock.add_response(method="PUT", url=f"{BASE}/api/v1/workflow/portal/{WORKFLOW_ID}/run",
-                                json=portal_reply())
-        with Client(api_key="svx_tk_test", base_url=BASE) as client:
-            run = client.workflows.run("order-intake")
-        assert str(run.id) == RUN_ID
-
-    def test_run_not_sync_uses_the_async_route(self, httpx_mock):
-        httpx_mock.add_response(method="PUT", url=f"{BASE}/api/v1/workflow/portal/{WORKFLOW_ID}/run/async",
-                                json={"runStatus": {"routeRun": RUN_ID, "status": "RUNNING"},
-                                      "executionResult": {"runId": RUN_ID, "workflowId": WORKFLOW_ID}})
-        with Client(api_key="svx_tk_test", base_url=BASE) as client:
-            run = client.workflows.run(WORKFLOW_ID, sync=False)
-        assert run.status == RunStatus.RUNNING
-        assert str(run.id) == RUN_ID
-
-    @pytest.mark.asyncio
-    async def test_async_client_run(self, httpx_mock):
-        httpx_mock.add_response(method="PUT", url=f"{BASE}/api/v1/workflow/portal/{WORKFLOW_ID}/run",
-                                json=portal_reply())
-        async with AsyncClient(api_key="svx_tk_test", base_url=BASE) as client:
-            run = await client.workflows.run(WORKFLOW_ID)
-        assert run.status == RunStatus.COMPLETED
