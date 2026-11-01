@@ -83,6 +83,41 @@ class APIError(WorkStudioError):
     pass
 
 
+class AgentTurnError(WorkStudioError):
+    """
+    Raised when an agent's turn failed.
+
+    The platform answers a failed turn on ``POST .../sessions/{id}/messages`` with a 2xx and
+    ``status: ERROR`` in the body, so the HTTP status alone says nothing went wrong. The SDK reads
+    the body and raises this instead of returning the failure as if it were a reply.
+
+    Attributes:
+        error_code: The platform's stable code for the failure (``AGENT_TURNED_OFF``,
+            ``BUDGET_EXCEEDED``, ...), or None when the reply carried none
+        session_id: The conversation session the turn ran in
+        response: The parsed reply (a ``MessageResponse``), metrics included
+    """
+
+    def __init__(
+        self,
+        message: str = "The agent's turn failed",
+        error_code: Optional[str] = None,
+        session_id: Optional[Any] = None,
+        status_code: Optional[int] = None,
+        response_body: Optional[Any] = None,
+        response: Optional[Any] = None,
+    ):
+        super().__init__(message, status_code, response_body)
+        self.error_code = error_code
+        self.session_id = session_id
+        self.response = response
+
+    def __str__(self) -> str:
+        if self.error_code:
+            return f"[{self.error_code}] {self.message}"
+        return self.message
+
+
 class TimeoutError(WorkStudioError):
     """Raised when a request times out."""
 

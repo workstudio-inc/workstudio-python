@@ -205,6 +205,20 @@ except APIError as e:
     print(f"API error: {e.message} (status: {e.status_code})")
 ```
 
+A failed agent turn raises `AgentTurnError`. The platform answers it with a 2xx and
+`status: ERROR` in the body, so the SDK reads the body: `error_code` is the platform's code
+(`AGENT_TURNED_OFF`, `BUDGET_EXCEEDED`, ...) when the reply has one, and `response` is the parsed
+reply.
+
+```python
+from workstudio import AgentTurnError
+
+try:
+    reply = session.send_message("What are our top deals?")
+except AgentTurnError as e:
+    print(f"Turn failed: {e.message} (code: {e.error_code})")
+```
+
 ## API Key Types
 
 | Type | Format | Use Case |

@@ -45,6 +45,7 @@ from workstudio.models import (
 )
 from workstudio.exceptions import (
     WorkStudioError,
+    AgentTurnError,
     AuthenticationError,
     NotFoundError,
     ValidationError,
@@ -69,6 +70,7 @@ __all__ = [
     "KnowledgeBaseHit",
     # Exceptions
     "WorkStudioError",
+    "AgentTurnError",
     "AuthenticationError",
     "NotFoundError",
     "ValidationError",

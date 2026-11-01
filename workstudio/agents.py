@@ -17,11 +17,12 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 from workstudio._http import AsyncHTTPClient, HTTPClient
-from workstudio.exceptions import NotFoundError
+from workstudio.exceptions import AgentTurnError, NotFoundError
 from workstudio.models import (
     Agent,
     AgentSession,
     MessageResponse,
+    MessageStatus,
     PageInfo,
     parse_page,
 )
@@ -58,6 +59,25 @@ def _message_body(message: str) -> dict[str, Any]:
     # ai-runtime TestMessageRequest: message, context, activeSkillIds. There is no includeDebug: a
     # session reports tool and knowledge-base details on every message (debugMode defaults to true).
     return {"message": message}
+
+
+def _turn_reply(body: dict[str, Any]) -> MessageResponse:
+    """
+    The reply to a sent message, or ``AgentTurnError`` when the turn failed.
+
+    ai-runtime answers a failed turn with a 2xx and ``status: ERROR`` (with ``errorMessage`` and,
+    when the failure has one, ``errorCode``), so a failure is read from the body, not the status.
+    """
+    reply = MessageResponse.model_validate(body)
+    if reply.status == MessageStatus.ERROR:
+        raise AgentTurnError(
+            message=reply.error_message or "The agent's turn failed",
+            error_code=reply.error_code or None,
+            session_id=reply.session_id,
+            response_body=body,
+            response=reply,
+        )
+    return reply
 
 
 class LiveSession:
@@ -103,6 +123,10 @@ class LiveSession:
 
         Returns:
             The agent's response with metrics
+
+        Raises:
+            AgentTurnError: The turn failed (the platform's reply said ``status: ERROR``); its
+                ``error_code`` carries the platform's code when there is one
         """
         if self._closed:
             raise RuntimeError("Session is closed")
@@ -111,7 +135,7 @@ class LiveSession:
             f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/messages",
             json=_message_body(message),
         )
-        return MessageResponse.model_validate(response)
+        return _turn_reply(response)
 
     def get_state(self) -> AgentSession:
         """Get the current session state and metrics."""
@@ -155,7 +179,7 @@ class AsyncLiveSession:
         message: str,
         include_debug: bool = False,
     ) -> MessageResponse:
-        """Send a message in this session."""
+        """Send a message in this session. Raises ``AgentTurnError`` when the turn failed."""
         if self._closed:
             raise RuntimeError("Session is closed")
 
@@ -163,7 +187,7 @@ class AsyncLiveSession:
             f"{AI_RUNTIME_PATH}/sessions/{self.session_id}/messages",
             json=_message_body(message),
         )
-        return MessageResponse.model_validate(response)
+        return _turn_reply(response)
 
     async def get_state(self) -> AgentSession:
         """Get the current session state and metrics."""

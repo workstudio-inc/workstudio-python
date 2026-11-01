@@ -2,6 +2,20 @@
 
 All notable changes to the work.studio Python SDK are recorded here.
 
+## Unreleased
+
+### Changed
+
+- A failed agent turn raises `AgentTurnError` (exported from `workstudio`) from
+  `LiveSession.send_message()`, `AsyncLiveSession.send_message()` and `agents.chat()`. The
+  platform answers a failed turn with a 2xx and `status: ERROR` in the body, and 0.2 returned
+  that as a `MessageResponse`, so code that checked only for an exception took the failure for an
+  answer. The error carries the platform's `error_code` when the reply has one (None otherwise),
+  `session_id`, and the parsed reply as `response`. `agents.chat()` still ends its session.
+  **Breaking** for code that read `status == MessageStatus.ERROR` off the reply: catch
+  `AgentTurnError` instead. Other statuses (`BLOCKED_BY_GUARDRAIL`, `CANCELLED`, `TIMEOUT`) are
+  still returned as replies.
+
 ## 0.2.0 - 2026-10-30
 
 A contract audit of every public method against the platform's routes and reply shapes
