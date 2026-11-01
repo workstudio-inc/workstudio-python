@@ -53,14 +53,14 @@ class ChatResponse(BaseModel):
 # Endpoints
 @app.get("/workflows")
 async def list_workflows():
-    """List all available workflows."""
-    workflows, page_info = await client.workflows.list()
+    """List all available workflows (every page; list() alone is one page of 20)."""
+    workflows = await client.workflows.list_all()
     return {
         "workflows": [
             {"id": str(wf.id), "name": wf.name, "endpoint": wf.endpoint}
             for wf in workflows
         ],
-        "total": page_info.total_elements,
+        "total": len(workflows),
     }
 
 

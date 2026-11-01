@@ -37,12 +37,12 @@ except NotFoundError:
 except ValidationError as e:
     print(f"Invalid inputs: {e.errors}")
 
-# Example 2: List all workflows
+# Example 2: List all workflows (every page; list() alone is one page of 20)
 print("\n=== Available Workflows ===")
-workflows, page_info = client.workflows.list()
+workflows = client.workflows.list_all()
 for wf in workflows:
     print(f"  - {wf.name} ({wf.endpoint})")
-print(f"Total: {page_info.total_elements} workflows")
+print(f"Total: {len(workflows)} workflows")
 
 # Example 3: Run workflow asynchronously and poll
 print("\n=== Async Workflow Run ===")

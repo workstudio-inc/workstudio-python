@@ -46,6 +46,29 @@ LONG_POLL_MAX_SECONDS = 110.0
 #: Extra seconds the HTTP read may take beyond the wait it asked the server for.
 _WAIT_HTTP_MARGIN_SECONDS = 15.0
 
+#: The largest page the platform answers (base-common ``SearchRequest.MAX_SIZE``); a bigger ``size``
+#: is clamped to it without an error.
+MAX_PAGE_SIZE = 100
+
+#: Runaway guard for :meth:`WorkflowsClient.list_all`: 200 pages of 100.
+_MAX_PAGES = 200
+
+
+def _has_page_after(info: PageInfo, page: int) -> bool:
+    """Whether the server says there is a page after ``page`` (0-based)."""
+    return bool(info.has_next) or page + 1 < info.total_pages
+
+
+def _keep_new(rows: List[Workflow], seen: set[str], out: List[Workflow]) -> None:
+    """Append the rows not seen yet: a row returned on two pages (the list changed) is kept once."""
+    for wf in rows:
+        key = str(wf.id) if wf.id is not None else None
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(wf)
+
 
 def _as_workflow_uuid(workflow_id: Union[UUID, str]) -> Optional[UUID]:
     """The workflow id as a UUID, or None when it is an endpoint name."""
@@ -108,20 +131,22 @@ class WorkflowsClient:
         search: Optional[str] = None,
     ) -> tuple[list[Workflow], PageInfo]:
         """
-        List all workflows.
+        One page of workflows.
 
-        Needs an organization key (``svx_tk_``); a customer key gets 403.
+        Needs an organization key (``svx_tk_``); a customer key gets 403. One page is not the list:
+        the platform answers 20 rows unless asked and never more than 100. For every workflow use
+        :meth:`list_all`, or follow ``page_info.has_next``.
 
         Args:
             page: Page number (0-indexed)
-            size: Number of items per page
+            size: Number of items per page (at most 100)
             search: Optional search query
 
         Returns:
-            Tuple of (workflows list, page info)
+            Tuple of (workflows on this page, page info)
 
         Example:
-            workflows, page_info = client.workflows.list()
+            workflows, page_info = client.workflows.list(page=0, size=50)
             for wf in workflows:
                 print(f"{wf.name}: {wf.id}")
         """
@@ -131,6 +156,27 @@ class WorkflowsClient:
 
         items, page_info = parse_page(self._http.get(PORTAL_PATH, params=params))
         return [Workflow.model_validate(w) for w in items], page_info
+
+    def list_all(self, search: Optional[str] = None) -> List[Workflow]:
+        """
+        Every workflow, across all pages.
+
+        Reads pages of 100 until the server says there is no next page. A workflow returned on two
+        pages (one was created while the pages were read) is kept once. A failed page raises; it is
+        never passed off as the whole list.
+
+        Example:
+            for wf in client.workflows.list_all():
+                print(f"{wf.name}: {wf.id}")
+        """
+        out: List[Workflow] = []
+        seen: set[str] = set()
+        for page in range(_MAX_PAGES):
+            rows, info = self.list(page=page, size=MAX_PAGE_SIZE, search=search)
+            _keep_new(rows, seen, out)
+            if not _has_page_after(info, page):
+                break
+        return out
 
     def get(self, workflow_id: Union[UUID, str]) -> Workflow:
         """
@@ -330,13 +376,24 @@ class AsyncWorkflowsClient:
         size: int = 20,
         search: Optional[str] = None,
     ) -> tuple[list[Workflow], PageInfo]:
-        """List all workflows (organization keys only)."""
+        """One page of workflows (organization keys only); see :meth:`WorkflowsClient.list`."""
         params: dict[str, Any] = {"page": page, "size": size}
         if search:
             params["search"] = search
 
         items, page_info = parse_page(await self._http.get(PORTAL_PATH, params=params))
         return [Workflow.model_validate(w) for w in items], page_info
+
+    async def list_all(self, search: Optional[str] = None) -> List[Workflow]:
+        """Every workflow, across all pages (see :meth:`WorkflowsClient.list_all`)."""
+        out: List[Workflow] = []
+        seen: set[str] = set()
+        for page in range(_MAX_PAGES):
+            rows, info = await self.list(page=page, size=MAX_PAGE_SIZE, search=search)
+            _keep_new(rows, seen, out)
+            if not _has_page_after(info, page):
+                break
+        return out
 
     async def get(self, workflow_id: Union[UUID, str]) -> Workflow:
         """Get a workflow by ID."""

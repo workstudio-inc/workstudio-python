@@ -30,13 +30,13 @@ Listing and reading workflow definitions needs an organization key (`svx_tk_...`
 Automation** only, each workflow comes back as a summary (id, global id, name, endpoint, inputs).
 
 ```python
-workflows, page_info = client.workflows.list()
-for wf in workflows:
+# Every workflow: list_all() reads every page (pages of 100, the platform's largest)
+for wf in client.workflows.list_all():
     print(f"{wf.name}: {wf.id}")
 
-# With pagination
+# One page: list() is one page (20 unless asked, never more than 100), not the whole list
 workflows, page_info = client.workflows.list(page=0, size=10)
-print(f"Total: {page_info.total_elements}")
+print(f"Total: {page_info.total_elements}, more pages: {page_info.has_next}")
 ```
 
 ### Run a workflow
@@ -145,7 +145,7 @@ import asyncio
 async def main():
     async with AsyncClient(api_key="svx_ck_prod_...") as client:
         # Workflows
-        workflows, _ = await client.workflows.list()
+        workflows = await client.workflows.list_all()
         result = await client.workflows.run("invoice-processor")
         
         # Agents

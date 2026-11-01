@@ -2,6 +2,17 @@
 
 All notable changes to the work.studio Python SDK are recorded here.
 
+## Unreleased
+
+### Added
+
+- `workflows.list_all(search=None)` (sync and async): every workflow, across all pages. It reads
+  pages of 100 (the platform's largest) until the server says there is no next page, and keeps a
+  workflow returned on two pages once. `workflows.list()` is unchanged: it is ONE page, 20 rows
+  unless asked and never more than 100. The examples (`examples/run_workflow.py`,
+  `examples/fastapi_integration.py`) and the README called `list()` and presented that page as
+  "all workflows"; they use `list_all()` now.
+
 ## 0.2.0 - 2026-10-30
 
 A contract audit of every public method against the platform's routes and reply shapes
