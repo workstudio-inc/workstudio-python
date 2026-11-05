@@ -2,6 +2,7 @@
 Internal HTTP client for the work.studio SDK.
 """
 
+import re
 from typing import Any, Optional, TypeVar
 
 import httpx
@@ -11,6 +12,7 @@ from workstudio.exceptions import (
     AuthenticationError,
     ConnectionError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     TimeoutError,
     ValidationError,
@@ -21,6 +23,11 @@ T = TypeVar("T")
 DEFAULT_BASE_URL = "https://api.work.studio"
 DEFAULT_TIMEOUT = 30.0
 
+
+
+# PermissionInterceptor names what a key lacks only in its detail:
+# "...required permission(s): [agent:read]".
+_REQUIRED_IN_DETAIL = re.compile(r"permission\(s\):\s*\[([^\]]+)\]")
 
 
 def _message(body: Any, default: str) -> str:
@@ -36,6 +43,37 @@ def _message(body: Any, default: str) -> str:
             if isinstance(value, str) and value.strip():
                 return value
     return default
+
+
+def _missing_permission(body: Any) -> Optional[str]:
+    """What a 403 says the key lacks: ``missingPermission``, else the name in its detail."""
+    if not isinstance(body, dict):
+        return None
+    named = body.get("missingPermission")
+    if isinstance(named, str) and named.strip():
+        return named.strip()
+    detail = body.get("detail")
+    if isinstance(detail, str):
+        found = _REQUIRED_IN_DETAIL.search(detail)
+        if found:
+            return found.group(1).strip()
+    return None
+
+
+def _permission_denied(body: Any) -> PermissionDeniedError:
+    """The error for a 403, saying which permission to add when the platform named one."""
+    message = _message(body, "Access denied - insufficient permissions")
+    missing = _missing_permission(body)
+    if missing and missing not in message:
+        message = f"{message}: this API key needs {missing}"
+    code = body.get("code") if isinstance(body, dict) else None
+    return PermissionDeniedError(
+        message=message,
+        status_code=403,
+        response_body=body,
+        missing_permission=missing,
+        code=code if isinstance(code, str) else None,
+    )
 
 
 class HTTPClient:
@@ -110,13 +148,7 @@ class HTTPClient:
             )
 
         if response.status_code == 403:
-            raise AuthenticationError(
-                message=_message(
-                    self._safe_json(response), "Access denied - insufficient permissions"
-                ),
-                status_code=403,
-                response_body=self._safe_json(response),
-            )
+            raise _permission_denied(self._safe_json(response))
 
         if response.status_code == 404:
             body = self._safe_json(response)
@@ -289,13 +321,7 @@ class AsyncHTTPClient:
             )
 
         if response.status_code == 403:
-            raise AuthenticationError(
-                message=_message(
-                    self._safe_json(response), "Access denied - insufficient permissions"
-                ),
-                status_code=403,
-                response_body=self._safe_json(response),
-            )
+            raise _permission_denied(self._safe_json(response))
 
         if response.status_code == 404:
             body = self._safe_json(response)

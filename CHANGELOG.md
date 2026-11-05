@@ -2,6 +2,23 @@
 
 All notable changes to the work.studio Python SDK are recorded here.
 
+## Unreleased
+
+### Added
+
+- `PermissionDeniedError`, a kind of `AuthenticationError`, for a 403. `missing_permission` is the permission the
+  platform says the key lacks, and `code` says why when no permission would help (`TENANT_API_KEY_ONLY`,
+  `API_KEY_NOT_ALLOWED`). Code that catches `AuthenticationError` keeps working.
+
+### Fixed
+
+- A 403 now says which permission to add. On most routes the platform has it only in `detail`, under the message
+  "Permission denied", so that message was all the SDK reported.
+
+### Docs
+
+- The README lists what each call needs from a key.
+
 ## 0.2.0 - 2026-10-30
 
 A contract audit of every public method against the platform's routes and reply shapes

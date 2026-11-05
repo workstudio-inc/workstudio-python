@@ -94,7 +94,8 @@ A key with only **Run Automation** reads the runs it started.
 ## Agents
 
 Agents need an organization key: listing and reading them needs `catalog:read`, sessions need
-`agent:execute`. A customer key cannot look agents up by name.
+`agent:execute`. Give an agent client all of `catalog:read`, `agent:read` and `agent:execute`. A customer
+key can't use agents.
 
 ### List agents
 
@@ -183,6 +184,7 @@ client = Client(
 from workstudio import Client
 from workstudio.exceptions import (
     AuthenticationError,
+    PermissionDeniedError,
     NotFoundError,
     ValidationError,
     RateLimitError,
@@ -193,6 +195,9 @@ client = Client()
 
 try:
     result = client.workflows.run("my-workflow")
+except PermissionDeniedError as e:
+    # The key is valid but may not do this. missing_permission is what to add to it, when one would help.
+    print(f"Refused: {e.message}")
 except AuthenticationError:
     print("Invalid API key")
 except NotFoundError:
@@ -211,6 +216,23 @@ except APIError as e:
 |------|--------|----------|
 | Customer Key | `svx_ck_...` | Runs workflows for one customer; cannot read definitions or agents |
 | Tenant Key | `svx_tk_...` | Backend services: runs, definitions, agents (per its permissions) |
+
+### What each call needs
+
+A key holds what it was given when it was made, and the SDK can't add to that. Give it what its calls need:
+
+| Calls | Organization key (`svx_tk_`) | Customer key (`svx_ck_`) |
+|-------|------------------------------|--------------------------|
+| `workflows.run` | `workflow:execute` | `workflow:execute` |
+| `workflows.get_run`, `get_run_by_external_id`, `list_runs`, the wait in `run` | `workflow:execute`, `workflow:read` or `run:read` | `workflow:execute` or `run:read`, for its own customer |
+| `workflows.list`, `get`, `get_by_endpoint` | `workflow:read` or `workflow:execute` | refused |
+| `agents.list`, `get`, `get_by_name` | `catalog:read` | refused |
+| `agents.create_session`, `chat`, sending messages | `agent:execute` | refused |
+| Reading a session | `agent:read` or `agent:execute` | refused |
+
+A refusal raises `PermissionDeniedError`, a kind of `AuthenticationError`. `missing_permission` names the permission
+to add, and `code` says why when no permission would help: `TENANT_API_KEY_ONLY` means a customer key can't use that
+route at all.
 
 Get your API key from the [Designer](https://designer.work.studio) → API Keys page.
 

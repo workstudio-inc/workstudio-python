@@ -46,6 +46,7 @@ from workstudio.models import (
 from workstudio.exceptions import (
     WorkStudioError,
     AuthenticationError,
+    PermissionDeniedError,
     NotFoundError,
     ValidationError,
     RateLimitError,
@@ -70,6 +71,7 @@ __all__ = [
     # Exceptions
     "WorkStudioError",
     "AuthenticationError",
+    "PermissionDeniedError",
     "NotFoundError",
     "ValidationError",
     "RateLimitError",
