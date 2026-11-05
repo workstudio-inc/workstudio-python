@@ -42,8 +42,9 @@ class PermissionDeniedError(AuthenticationError):
     Raised on a 403: the key is valid, but it may not do this.
 
     ``missing_permission`` is what the platform says the key needs, such as ``agent:execute``. Add
-    it to the key in the Designer, under API Keys. It is None when no permission would help: ``code``
-    then says why, for example ``TENANT_API_KEY_ONLY`` for a customer key on an organization-key route.
+    it to the key in the Designer, under API Keys. It is None when no permission would help:
+    ``code`` then says why, for example ``TENANT_API_KEY_ONLY`` for a customer key on an
+    organization-key route.
 
     It is an AuthenticationError, so code that catches that keeps working.
     """
