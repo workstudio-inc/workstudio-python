@@ -5,12 +5,16 @@ This example shows how to:
 1. List available agents
 2. Send single messages
 3. Have multi-turn conversations
+
+Agent chat needs an organization key (svx_tk_...) with agent:execute, and catalog:read to list agents or
+find one by name. A customer key (svx_ck_...) runs workflows, not chats. A customer of yours chats as an
+App's end user, through the App SDK, or in the embed assistant.
 """
 
 from workstudio import Client
 
 # Initialize client
-client = Client()  # Uses WORKSTUDIO_API_KEY env var
+client = Client()  # Uses WORKSTUDIO_API_KEY env var: an organization key, see above
 
 # Example 1: List published agents
 print("=== Available Agents ===")

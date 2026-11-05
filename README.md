@@ -143,7 +143,8 @@ from workstudio import AsyncClient
 import asyncio
 
 async def main():
-    async with AsyncClient(api_key="svx_ck_prod_...") as client:
+    # An organization key: it lists workflows and starts agent sessions, which a customer key can't.
+    async with AsyncClient(api_key="svx_tk_prod_...") as client:
         # Workflows
         workflows, _ = await client.workflows.list()
         result = await client.workflows.run("invoice-processor")
